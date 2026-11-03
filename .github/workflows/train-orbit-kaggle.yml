@@ -85,9 +85,20 @@ jobs:
         run: |
           set -euo pipefail
           KERNEL_ID="$KAGGLE_USERNAME/orbit-seed-training"
-          kaggle kernels push -p "$RUNNER_TEMP/orbit-kaggle-kernel" --timeout 43200 --accelerator NvidiaTeslaT4
           echo "KERNEL_ID=$KERNEL_ID" >> "$GITHUB_ENV"
-          echo "Submitted $KERNEL_ID"
+          # Reuse a completed kernel output if a previous run already trained successfully.
+          # This avoids spending GPU quota a second time just to repair a Git commit.
+          set +e
+          existing_status="$(kaggle kernels status "$KERNEL_ID" 2>&1)"
+          existing_status_code=$?
+          set -e
+          echo "$existing_status"
+          if [[ $existing_status_code -eq 0 ]] && echo "$existing_status" | grep -Eiq 'complete|completed|succeeded|finished'; then
+            echo "A completed Kaggle run exists; reusing its saved output."
+          else
+            kaggle kernels push -p "$RUNNER_TEMP/orbit-kaggle-kernel" --timeout 43200 --accelerator NvidiaTeslaT4
+            echo "Submitted $KERNEL_ID"
+          fi
 
       - name: Wait for Kaggle training to finish
         shell: bash
@@ -145,7 +156,8 @@ jobs:
           cp "$RUNNER_TEMP/orbit-extracted/training_report.json" orbit/seed_model/training_report.json
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add orbit/seed_model/model.safetensors orbit/seed_model/optimizer_state.pt orbit/seed_model/training_log.json orbit/seed_model/training_report.json
+          git add orbit/seed_model/model.safetensors orbit/seed_model/training_log.json orbit/seed_model/training_report.json
+          git add -f orbit/seed_model/optimizer_state.pt
           if git diff --cached --quiet; then
             echo "No checkpoint changes to commit."
             exit 0
@@ -159,8 +171,8 @@ jobs:
           {
             echo "## ORBIT Seed GPU training"
             echo ""
-            echo "Kaggle kernel: `$KERNEL_ID`"
-            echo "Requested steps: `$ORBIT_STEPS`"
+            printf 'Kaggle kernel: `%s`\n' "$KERNEL_ID"
+            printf 'Requested steps: `%s`\n' "$ORBIT_STEPS"
             if [[ -f orbit/seed_model/training_report.json ]]; then
               echo ""
               cat orbit/seed_model/training_report.json
