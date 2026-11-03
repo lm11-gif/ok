@@ -1,31 +1,32 @@
 # Import the ORBIT Seed model binaries
 
-The repository includes a GitHub Actions workflow at
-`.github/workflows/import-orbit-model.yml`. It copies the two binary model
-files from a GitHub Release into `orbit/seed_model/`, then commits them to
-`main`.
+The GitHub Actions workflow at
+`.github/workflows/import-orbit-model.yml` copies the two binary model
+files from a GitHub Release into `orbit/seed_model/`, validates them, and
+commits them to `main`.
 
-## One-time upload
+## Your current release
 
-1. Open https://github.com/lm11-gif/ok/releases/new while signed in.
-2. Create a tag such as `orbit-seed-upload` and use a release title such as
-   `ORBIT Seed model upload`.
-3. Attach the original archive named exactly
-   `orbit-seed-gpu-ready.zip`. Do not rename it.
-4. Publish the release.
+The release tag is `orbit-seed-upload`. It contains the two separate assets:
+- `model.safetensors`
+- `tokenizer.model`
 
-Publishing the release starts the workflow automatically. It finds
-`model.safetensors` and `tokenizer.model` inside the ZIP, checks that both
-are present and that the safetensors header is readable, then commits those
-two files to `main`.
+The importer has been updated to accept these two separate assets. The first
+release-triggered run was skipped because the earlier workflow mistakenly
+looked for a ZIP archive. The corrected workflow needs to be started manually
+for this already-published release.
 
-The workflow uses the repository's built-in `GITHUB_TOKEN`; no personal
-access token is needed. Check the **Actions** tab for the workflow run and
-its result. The release asset itself remains attached to the release.
+## Start the import
 
-## Manual rerun
+1. Open https://github.com/lm11-gif/ok/actions/workflows/import-orbit-model.yml
+2. Select **Run workflow**.
+3. Keep branch set to `main`.
+4. Enter `orbit-seed-upload` as the release tag.
+5. Click **Run workflow**.
 
-If the release event did not trigger, open **Actions → Import ORBIT Seed
-model binaries → Run workflow**, enter the release tag, and run it. The
-workflow can be rerun; if the two files are already identical, it makes no
-additional commit.
+The workflow downloads the two files from the release using the repository's
+built-in `GITHUB_TOKEN`, checks that both files exist and that the
+safetensors header is readable, then commits them to `main`.
+
+No personal access token is needed. Check the Actions run for the result.
+The release assets remain attached to the release.
