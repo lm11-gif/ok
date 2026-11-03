@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ORBIT · GitHub Binary Uploader</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1017;--p:#141d28;--l:#2b3a4b;--t:#eaf1f8;--m:#96a6b8;--a:#7be8d3;--g:#8dd6a9;--r:#ff929a}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(900px 500px at 10% -5%,#16313a,transparent 60%),var(--bg);color:var(--t);font:14px/1.5 system-ui,Segoe UI,Arial;padding:32px 16px}.wrap{max-width:720px;margin:auto}.card{background:var(--p);border:1px solid var(--l);border-radius:17px;padding:22px;margin:12px 0}h1{margin:5px 0;font-size:26px}.muted,.hint{color:var(--m);font-size:12px}.warn{padding:12px;background:#2c2418;border:1px solid #5a4930;border-radius:10px;color:#ead4ad;font-size:12px;margin:16px 0}.field{display:grid;gap:7px;margin:16px 0}.field label{font-weight:700;font-size:12px}.field input{padding:12px;background:#0c131c;border:1px solid var(--l);border-radius:9px;color:var(--t);width:100%}.files{font-size:12px;color:var(--m)}button{border:0;background:var(--a);color:#08201c;border-radius:9px;padding:12px 16px;font-weight:800;cursor:pointer}button:disabled{opacity:.4;cursor:not-allowed}.status{white-space:pre-wrap;overflow:auto;max-height:260px;background:#0c131c;border:1px solid var(--l);border-radius:10px;padding:12px;margin-top:15px;font:12px/1.6 ui-monospace,monospace}.ok{color:var(--g)}.err{color:var(--r)}a{color:var(--a)}li{margin:6px 0;font-size:12px}
+</style>
+</head>
+<body><div class="wrap">
+<div style="color:var(--a);font-size:11px;letter-spacing:.18em;font-weight:800">ORBIT · LOCAL UTILITY</div>
+<section class="card">
+<h1>GitHub binary uploader</h1>
+<p class="muted">Upload the original ORBIT Seed weights and tokenizer directly from this browser to <b>lm11-gif/ok</b>.</p>
+<div class="warn"><b>Token safety:</b> Create a fine-grained GitHub token restricted to repository <code>lm11-gif/ok</code> with only <b>Contents: Read and write</b>. The token is used only for requests directly to api.github.com, never saved, never sent to ChatGPT, and cleared after upload. Revoke it afterward. Never paste the token into this chat.</div>
+<div class="field"><label for="token">GitHub fine-grained token</label><input id="token" type="password" autocomplete="off" placeholder="github_pat_…"><span class="hint">Create at <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">GitHub token settings</a>. Choose only the ok repository and Contents: Read and write.</span></div>
+<div class="field"><label for="files">Select exactly these two extracted files</label><input id="files" type="file" multiple accept=".safetensors,.model"><div class="files" id="chosen">model.safetensors — not selected<br>tokenizer.model — not selected</div><span class="hint">Extract orbit-seed-gpu-ready.zip first. Destination: orbit/seed_model/ on main.</span></div>
+<label class="hint"><input id="ack" type="checkbox"> I understand this temporary token has repository write access and will revoke it after upload.</label>
+<p><button id="go" disabled>Upload both files</button></p>
+<div class="status" id="status" role="status" aria-live="polite">Waiting for files and token.</div>
+<p class="hint">No analytics, external libraries, or backend server. Files are committed one at a time.</p>
+</section>
+<section class="card"><b>Steps</b><ol>
+<li>Generate a fine-grained token, restrict it to <code>lm11-gif/ok</code>, and grant <b>Contents: Read and write</b>.</li>
+<li>Extract <code>orbit-seed-gpu-ready.zip</code> and select <code>model.safetensors</code> and <code>tokenizer.model</code>.</li>
+<li>Paste the token here, tick the confirmation, and upload.</li>
+<li>Confirm both files appear in <a href="https://github.com/lm11-gif/ok/tree/main/orbit/seed_model" target="_blank" rel="noopener">the ORBIT Seed folder</a>, then revoke the token.</li>
+</ol></section></div>
+<script>
+'use strict';
+const owner='lm11-gif',repo='ok',branch='main',dir='orbit/seed_model/';
+const needed=['model.safetensors','tokenizer.model'];
+const $=id=>document.getElementById(id);let selected=[];
+function msg(s,cls=''){const d=document.createElement('div');d.textContent=s;if(cls)d.className=cls;$('status').append(d);$('status').scrollTop=$('status').scrollHeight;}
+function size(n){return n<1048576?(n/1024).toFixed(1)+' KB':(n/1048576).toFixed(2)+' MB';}
+function validate(){const names=selected.map(f=>f.name);$('go').disabled=!(needed.every(n=>names.includes(n))&&names.length===2&&$('token').value.trim().length>20&&$('ack').checked);}
+$('files').addEventListener('change',()=>{selected=Array.from($('files').files||[]);$('chosen').textContent=needed.map(n=>{const f=selected.find(x=>x.name===n);return n+' — '+(f?size(f.size):'not selected')}).join('\n');if(selected.some(f=>!needed.includes(f.name)))msg('Select only model.safetensors and tokenizer.model.','err');validate();});
+['token','ack'].forEach(id=>$(id).addEventListener('input',validate));$('ack').addEventListener('change',validate);
+function b64(buf){const u=new Uint8Array(buf);let bin='';for(let i=0;i<u.length;i+=32768)bin+=String.fromCharCode(...u.subarray(i,Math.min(i+32768,u.length)));return btoa(bin);}
+async function api(url,token,opts={}){const r=await fetch(url,{...opts,headers:{Accept:'application/vnd.github+json',Authorization:'Bearer '+token,'X-GitHub-Api-Version':'2022-11-28',...(opts.headers||{})}});const raw=await r.text();let d={};try{d=raw?JSON.parse(raw):{}}catch{d={message:raw.slice(0,300)}}if(!r.ok)throw Error((d.message||'HTTP '+r.status)+' (HTTP '+r.status+')');return d;}
+async function put(file,token){const path=dir+file.name,url='https://api.github.com/repos/'+owner+'/'+repo+'/contents/'+path.split('/').map(encodeURIComponent).join('/');msg('Checking '+path+'…');let sha=null;try{const old=await api(url+'?ref='+branch,token,{headers:{Accept:'application/vnd.github.object+json'}});sha=old.sha||null;}catch(e){if(!String(e.message).includes('HTTP 404'))throw e;}msg('Encoding '+file.name+' ('+size(file.size)+')…');const content=b64(await file.arrayBuffer());msg('Uploading '+file.name+'…');const body={message:(sha?'Update':'Add')+' ORBIT Seed binary asset: '+file.name,content,branch};if(sha)body.sha=sha;const result=await api(url,token,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});msg('✓ '+file.name+' committed: '+(result.commit?.sha||'success'),'ok');}
+$('go').addEventListener('click',async()=>{validate();if($('go').disabled)return;const token=$('token').value.trim();$('go').disabled=true;$('files').disabled=true;$('token').disabled=true;$('ack').disabled=true;$('status').textContent='Starting…';try{const r=await api('https://api.github.com/repos/'+owner+'/'+repo,token);msg('Authenticated for '+r.full_name+'.');if(r.default_branch!==branch)throw Error('Repository default branch is not main.');for(const n of needed){const f=selected.find(x=>x.name===n);if(!f)throw Error('Missing '+n);await put(f,token);}msg('Both binary files are committed to GitHub. Verify the ORBIT Seed folder, then revoke your temporary token.','ok');}catch(e){msg('Stopped: '+e.message,'err');msg('Any file already committed remains in GitHub. Fix the issue and retry.');}finally{$('token').value='';$('token').disabled=false;$('files').disabled=false;$('ack').checked=false;$('ack').disabled=false;$('go').disabled=true;selected=Array.from($('files').files||[]);validate();}});
+</script></body></html>
