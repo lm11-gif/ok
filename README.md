@@ -1,1 +1,24 @@
-TESTING FOR AI
+# ORBIT workspace
+
+This repository now houses the ORBIT AI Playground and ORBIT Seed research model.
+
+## Projects
+
+- [AI Playground](orbit/ai_playground/README.md) — browser-based front end for Ollama and OpenAI-compatible models.
+- [ORBIT Seed 0.1](orbit/seed_model/README.md) — the small decoder-only Transformer trained from random initialization.
+- [Kaggle GPU continuation guide](orbit/seed_model/KAGGLE_GPU_GUIDE.md) — instructions for continuing the existing Seed checkpoint on a hosted GPU.
+- [Kaggle notebook](orbit/training/ORBIT_Kaggle_GPU_Training.ipynb) — GPU continuation notebook.
+
+## Important model status
+
+ORBIT Seed 0.1 is an educational prototype with 871,552 parameters, a 160-token context, and 2,400 recorded CPU training updates. Its evaluation found that generated answers were not coherent enough for dependable conversation. Lower training loss on its small synthetic corpus does not establish general language ability.
+
+The text sources and training scripts are tracked here. The original binary checkpoint and SentencePiece model are not included in this commit because the connected GitHub actions available in this session cannot upload arbitrary binary files. Add these two files from the original model archive to `orbit/seed_model/`:
+- `model.safetensors`
+- `tokenizer.model`
+
+Do not replace them with placeholders. The GPU continuation script requires both files.
+
+## Repository access
+
+The connected GitHub integration has verified read and push permissions for this repository. Changes made through it are committed directly to `main`.
