@@ -1,0 +1,168 @@
+name: Train ORBIT Seed on Kaggle GPU
+
+on:
+  workflow_dispatch:
+    inputs:
+      steps:
+        description: "Additional training steps (start conservatively)"
+        required: true
+        default: "500"
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - "orbit/training/START_TRAINING.txt"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: orbit-kaggle-training
+  cancel-in-progress: false
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+      ORBIT_STEPS: ${{ github.event.inputs.steps || '500' }}
+      ORBIT_BATCH_SIZE: "32"
+      ORBIT_SEQ_LEN: "160"
+      ORBIT_LEARNING_RATE: "0.00003"
+    steps:
+      - name: Check out ORBIT
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Validate Kaggle credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${KAGGLE_API_TOKEN:-}" || -z "${KAGGLE_USERNAME:-}" ]]; then
+            echo "::error::Add KAGGLE_API_TOKEN and KAGGLE_USERNAME under Settings → Secrets and variables → Actions, then trigger this workflow again."
+            exit 1
+          fi
+          if ! [[ "$ORBIT_STEPS" =~ ^[0-9]+$ ]] || (( ORBIT_STEPS < 1 || ORBIT_STEPS > 50000 )); then
+            echo "::error::ORBIT_STEPS must be an integer between 1 and 50000."
+            exit 1
+          fi
+
+      - name: Install Kaggle CLI
+        run: |
+          python -m pip install --upgrade kaggle
+          kaggle --version
+
+      - name: Prepare private Kaggle GPU kernel
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/orbit-kaggle-kernel"
+          cp orbit/training/kaggle/train_orbit.py "$RUNNER_TEMP/orbit-kaggle-kernel/train_orbit.py"
+          cat > "$RUNNER_TEMP/orbit-kaggle-kernel/kernel-metadata.json" <<EOF
+          {
+            "id": "$KAGGLE_USERNAME/orbit-seed-training",
+            "title": "ORBIT Seed Training",
+            "code_file": "train_orbit.py",
+            "language": "python",
+            "kernel_type": "script",
+            "is_private": "true",
+            "enable_gpu": "true",
+            "enable_internet": "true",
+            "machine_shape": "NvidiaTeslaT4",
+            "dataset_sources": [],
+            "competition_sources": [],
+            "kernel_sources": [],
+            "model_sources": []
+          }
+          EOF
+          cat "$RUNNER_TEMP/orbit-kaggle-kernel/kernel-metadata.json"
+
+      - name: Submit training job to Kaggle GPU
+        shell: bash
+        run: |
+          set -euo pipefail
+          KERNEL_ID="$KAGGLE_USERNAME/orbit-seed-training"
+          kaggle kernels push -p "$RUNNER_TEMP/orbit-kaggle-kernel" --timeout 43200 --accelerator NvidiaTeslaT4
+          echo "KERNEL_ID=$KERNEL_ID" >> "$GITHUB_ENV"
+          echo "Submitted $KERNEL_ID"
+
+      - name: Wait for Kaggle training to finish
+        shell: bash
+        run: |
+          set -euo pipefail
+          completed=0
+          for attempt in $(seq 1 180); do
+            status="$(kaggle kernels status "$KERNEL_ID" 2>&1 || true)"
+            echo "$status"
+            if echo "$status" | grep -Eiq 'complete|completed|succeeded|finished'; then
+              completed=1
+              break
+            fi
+            if echo "$status" | grep -Eiq 'error|failed|cancelled|canceled'; then
+              echo "::error::Kaggle kernel reported failure."
+              kaggle kernels logs "$KERNEL_ID" || true
+              exit 1
+            fi
+            sleep 60
+          done
+          if (( completed == 0 )); then
+            echo "::error::Timed out while waiting for Kaggle. Check the Kaggle kernel page."
+            kaggle kernels status "$KERNEL_ID" || true
+            exit 1
+          fi
+
+      - name: Download trained checkpoint from Kaggle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/orbit-output"
+          kaggle kernels output "$KERNEL_ID" -p "$RUNNER_TEMP/orbit-output" --force
+          ARCHIVE="$RUNNER_TEMP/orbit-output/orbit-seed-trained.zip"
+          if [[ ! -s "$ARCHIVE" ]]; then
+            echo "::error::Kaggle output archive was not found."
+            find "$RUNNER_TEMP/orbit-output" -maxdepth 3 -type f -printf '%p (%s bytes)\n'
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/orbit-extracted"
+          python -m zipfile -e "$ARCHIVE" "$RUNNER_TEMP/orbit-extracted"
+          for name in model.safetensors tokenizer.model config.json training_log.json optimizer_state.pt training_report.json; do
+            test -s "$RUNNER_TEMP/orbit-extracted/$name" || {
+              echo "::error::Missing output file: $name"
+              exit 1
+            }
+          done
+
+      - name: Commit trained ORBIT checkpoint to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/orbit-extracted/model.safetensors" orbit/seed_model/model.safetensors
+          cp "$RUNNER_TEMP/orbit-extracted/optimizer_state.pt" orbit/seed_model/optimizer_state.pt
+          cp "$RUNNER_TEMP/orbit-extracted/training_log.json" orbit/seed_model/training_log.json
+          cp "$RUNNER_TEMP/orbit-extracted/training_report.json" orbit/seed_model/training_report.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add orbit/seed_model/model.safetensors orbit/seed_model/optimizer_state.pt orbit/seed_model/training_log.json orbit/seed_model/training_report.json
+          if git diff --cached --quiet; then
+            echo "No checkpoint changes to commit."
+            exit 0
+          fi
+          git commit -m "Train ORBIT Seed on Kaggle GPU"
+          git push origin HEAD:main
+
+      - name: Publish training summary
+        if: always()
+        run: |
+          {
+            echo "## ORBIT Seed GPU training"
+            echo ""
+            echo "Kaggle kernel: `$KERNEL_ID`"
+            echo "Requested steps: `$ORBIT_STEPS`"
+            if [[ -f orbit/seed_model/training_report.json ]]; then
+              echo ""
+              cat orbit/seed_model/training_report.json
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
