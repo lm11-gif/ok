@@ -1,6 +1,10 @@
 name: Import ORBIT Seed model binaries
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/import-orbit-model.yml"
   release:
     types: [published]
   workflow_dispatch:
@@ -16,6 +20,7 @@ permissions:
 jobs:
   import-model:
     if: >-
+      github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
       (
         contains(github.event.release.assets.*.name, 'model.safetensors') &&
@@ -31,7 +36,7 @@ jobs:
       - name: Download the two model files from the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag || 'orbit-seed-upload' }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/orbit-import"
