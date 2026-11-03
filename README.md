@@ -17,7 +17,7 @@ The text sources and training scripts are tracked here. The original binary chec
 - `model.safetensors`
 - `tokenizer.model`
 
-Do not replace them with placeholders. The GPU continuation script requires both files.
+Do not replace them with placeholders. The GPU continuation script requires both files. Follow [the remaining binary asset upload steps](orbit/UPLOAD_REMAINING.md) to add them through GitHub's web uploader.
 
 ## Repository access
 
