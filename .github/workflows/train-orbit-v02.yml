@@ -28,6 +28,9 @@ jobs:
         with:
           ref: main
 
+      - name: Check training script syntax
+        run: python -m py_compile orbit/seed_model_v0.2/train_smollm2.py orbit/seed_model_v0.2/chat.py
+
       - name: Validate Kaggle credentials
         shell: bash
         run: |
