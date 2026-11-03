@@ -1,0 +1,178 @@
+name: Fine-tune ORBIT Seed v0.2 on Kaggle GPU
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "orbit/seed_model_v0.2/START_TRAINING.txt"
+      - ".github/workflows/train-orbit-v02.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: orbit-v02-kaggle-training
+  cancel-in-progress: false
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+
+    steps:
+      - name: Check out ORBIT
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Validate Kaggle credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${KAGGLE_API_TOKEN:-}" || -z "${KAGGLE_USERNAME:-}" ]]; then
+            echo "::error::Add KAGGLE_API_TOKEN and KAGGLE_USERNAME in repository Actions secrets."
+            exit 1
+          fi
+
+      - name: Install Kaggle CLI
+        run: |
+          python -m pip install --upgrade kaggle
+          kaggle --version
+
+      - name: Prepare private Kaggle training kernel
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/orbit-v02-kernel"
+          cp orbit/seed_model_v0.2/train_smollm2.py "$RUNNER_TEMP/orbit-v02-kernel/train_smollm2.py"
+          cat > "$RUNNER_TEMP/orbit-v02-kernel/kernel-metadata.json" <<EOF
+          {
+            "id": "$KAGGLE_USERNAME/orbit-seed-v02-training",
+            "title": "ORBIT Seed v0.2 Fine-tuning",
+            "code_file": "train_smollm2.py",
+            "language": "python",
+            "kernel_type": "script",
+            "is_private": "true",
+            "enable_gpu": "true",
+            "enable_internet": "true",
+            "machine_shape": "NvidiaTeslaT4",
+            "dataset_sources": [],
+            "competition_sources": [],
+            "kernel_sources": [],
+            "model_sources": []
+          }
+          EOF
+          cat "$RUNNER_TEMP/orbit-v02-kernel/kernel-metadata.json"
+
+      - name: Submit fine-tuning job to Kaggle
+        shell: bash
+        run: |
+          set -euo pipefail
+          KERNEL_ID="$KAGGLE_USERNAME/orbit-seed-v02-training"
+          kaggle kernels push -p "$RUNNER_TEMP/orbit-v02-kernel" --timeout 43200 --accelerator NvidiaTeslaT4
+          echo "KERNEL_ID=$KERNEL_ID" >> "$GITHUB_ENV"
+          echo "Submitted $KERNEL_ID"
+
+      - name: Wait for Kaggle to finish
+        shell: bash
+        run: |
+          set -euo pipefail
+          completed=0
+          for attempt in $(seq 1 320); do
+            status="$(kaggle kernels status "$KERNEL_ID" 2>&1 || true)"
+            echo "$status"
+            if echo "$status" | grep -Eiq 'complete|completed|succeeded|finished'; then
+              completed=1
+              break
+            fi
+            if echo "$status" | grep -Eiq 'error|failed|cancelled|canceled'; then
+              echo "::error::Kaggle reported a training failure."
+              kaggle kernels logs "$KERNEL_ID" || true
+              exit 1
+            fi
+            sleep 60
+          done
+          if (( completed == 0 )); then
+            echo "::error::Timed out waiting for Kaggle. Check the kernel page."
+            kaggle kernels status "$KERNEL_ID" || true
+            exit 1
+          fi
+
+      - name: Download and validate the trained model
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/orbit-v02-output" "$RUNNER_TEMP/orbit-v02-extracted"
+          kaggle kernels output "$KERNEL_ID" -p "$RUNNER_TEMP/orbit-v02-output" --force
+          ARCHIVE="$(find "$RUNNER_TEMP/orbit-v02-output" -type f -name 'orbit-seed-v0.2.zip' -print -quit)"
+          if [[ -z "$ARCHIVE" || ! -s "$ARCHIVE" ]]; then
+            echo "::error::Kaggle output archive orbit-seed-v0.2.zip was not found."
+            find "$RUNNER_TEMP/orbit-v02-output" -maxdepth 4 -type f -printf '%p (%s bytes)\n'
+            exit 1
+          fi
+          python -m zipfile -e "$ARCHIVE" "$RUNNER_TEMP/orbit-v02-extracted"
+          test -s "$RUNNER_TEMP/orbit-v02-extracted/training_report.json"
+          test -s "$RUNNER_TEMP/orbit-v02-extracted/config.json"
+          test -s "$RUNNER_TEMP/orbit-v02-extracted/tokenizer.json"
+          find "$RUNNER_TEMP/orbit-v02-extracted" -maxdepth 1 -name 'model*.safetensors' -size +1M | grep -q .
+          echo "ORBIT_V02_ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+          echo "ORBIT_V02_EXTRACTED=$RUNNER_TEMP/orbit-v02-extracted" >> "$GITHUB_ENV"
+          sha256sum "$ARCHIVE"
+
+      - name: Save the training report in the repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "$ORBIT_V02_EXTRACTED/training_report.json" orbit/seed_model_v0.2/training_report.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add orbit/seed_model_v0.2/training_report.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Record ORBIT Seed v0.2 training results"
+            git push origin HEAD:main
+          fi
+
+      - name: Publish the model as a GitHub Release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="orbit-seed-v0.2"
+          NOTES="$RUNNER_TEMP/orbit-v02-release-notes.md"
+          cat > "$NOTES" <<'EOF'
+          ORBIT Seed v0.2 is a fine-tuned derivative of HuggingFaceTB/SmolLM2-360M.
+          It is not a from-scratch model. Fine-tuning uses the Apache-2.0
+          HuggingFaceTB/smol-smoltalk conversation dataset. The ZIP includes
+          the merged Transformers checkpoint, tokenizer, upstream license
+          notice, and training report with held-out evaluation and generated
+          sample answers.
+          EOF
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ORBIT_V02_ARCHIVE" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload "$TAG" "$ORBIT_V02_EXTRACTED/training_report.json" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" "$ORBIT_V02_ARCHIVE" "$ORBIT_V02_EXTRACTED/training_report.json" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "ORBIT Seed v0.2 — SmolLM2-360M fine-tune" \
+              --notes-file "$NOTES" \
+              --target main
+          fi
+
+      - name: Publish summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## ORBIT Seed v0.2"
+            echo ""
+            echo "Kaggle kernel: `$KERNEL_ID`"
+            if [[ -f orbit/seed_model_v0.2/training_report.json ]]; then
+              echo ""
+              cat orbit/seed_model_v0.2/training_report.json
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
