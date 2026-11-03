@@ -8,6 +8,7 @@ This repository now houses the ORBIT AI Playground and ORBIT Seed research model
 - [ORBIT Seed 0.1](orbit/seed_model/README.md) — the small decoder-only Transformer trained from random initialization.
 - [Kaggle GPU continuation guide](orbit/seed_model/KAGGLE_GPU_GUIDE.md) — instructions for continuing the existing Seed checkpoint on a hosted GPU.
 - [Kaggle notebook](orbit/training/ORBIT_Kaggle_GPU_Training.ipynb) — GPU continuation notebook.
+- [GitHub binary uploader](orbit/tools/github-binary-uploader.html) — browser utility for uploading ORBIT's weights and tokenizer.
 
 ## Important model status
 
