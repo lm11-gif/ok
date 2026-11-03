@@ -1,1 +1,2 @@
 After Kaggle credentials are configured, updating this file starts ORBIT Seed v0.2 fine-tuning.
+Launch ORBIT Seed v0.2 fine-tuning — 2026-11-04
