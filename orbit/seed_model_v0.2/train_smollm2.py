@@ -15,6 +15,21 @@ import sys
 import time
 from pathlib import Path
 
+# Kaggle kernels do not all ship with the same NLP packages. Install pinned,
+# mutually compatible versions without replacing the preinstalled CUDA PyTorch.
+subprocess.run(
+    [
+        sys.executable, "-m", "pip", "install", "--quiet",
+        "transformers==4.48.3",
+        "datasets==3.3.2",
+        "peft==0.14.0",
+        "accelerate==1.3.0",
+        "safetensors>=0.4.5",
+        "sentencepiece>=0.2.0",
+    ],
+    check=True,
+)
+
 import torch
 from datasets import load_dataset
 from peft import LoraConfig, get_peft_model
@@ -91,8 +106,10 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(CHAT_TOKENIZER, use_fast=True)
     if not tokenizer.chat_template:
         raise RuntimeError("The selected SmolLM2 instruct tokenizer has no chat template.")
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    # Use a distinct padding token so the data collator does not mask genuine
+    # end-of-turn/end-of-sequence tokens from the training loss.
+    if tokenizer.pad_token is None or tokenizer.pad_token_id == tokenizer.eos_token_id:
+        tokenizer.add_special_tokens({"pad_token": "<|orbit_pad|>"})
     tokenizer.padding_side = "right"
     tokenizer.truncation_side = "left"
 
@@ -101,9 +118,13 @@ def main():
         torch_dtype=torch.float16,
         low_cpu_mem_usage=True,
     )
+    if model.get_input_embeddings().num_embeddings != len(tokenizer):
+        model.resize_token_embeddings(len(tokenizer))
     model.config.pad_token_id = tokenizer.pad_token_id
     model.config.use_cache = False
     model.gradient_checkpointing_enable()
+    if hasattr(model, "enable_input_require_grads"):
+        model.enable_input_require_grads()
 
     lora = LoraConfig(
         r=16,
