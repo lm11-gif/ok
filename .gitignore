@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local training state and outputs
+orbit/seed_model/optimizer_state.pt
+orbit/seed_model/checkpoints/
+orbit/seed_model/runs/
+orbit/seed_model/*.log
+orbit/seed_model/orbit-seed-gpu-checkpoint.zip
+
+# Local notebook files
+.ipynb_checkpoints/
