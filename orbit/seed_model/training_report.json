@@ -1,0 +1,27 @@
+{
+  "project": "ORBIT Seed",
+  "training_mode": "continued training from existing checkpoint",
+  "device": "cuda",
+  "gpu": "Tesla T4",
+  "torch_version": "2.11.0+cu130",
+  "cuda_version": "13.0",
+  "steps_added": 500,
+  "starting_step": 2400,
+  "ending_step": 2900,
+  "batch_size": 32,
+  "sequence_length": 160,
+  "learning_rate": 3e-05,
+  "initial_weights_sha256": "db4c245df617c28eb58292d04d56067a2b0ab5dca21c75538c026f2ec8e4e210",
+  "final_weights_sha256": "f3f66b54535b4c3acaf8632f97d0370f800f5f673e3cfe7aa5a79e6bd0aeda93",
+  "training_record": {
+    "step": 2900,
+    "chunk_train_loss": 0.9204,
+    "val_loss": 0.7897,
+    "chunk_seconds": 9.0,
+    "device": "cuda",
+    "batch_size": 32,
+    "sequence_length": 160
+  },
+  "elapsed_seconds": 20.0,
+  "note": "Validation loss measures next-token prediction on ORBIT's existing synthetic split; it is not a conversational quality benchmark."
+}
