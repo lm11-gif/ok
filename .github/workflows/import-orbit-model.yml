@@ -1,0 +1,121 @@
+name: Import ORBIT Seed model binaries
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag of the release containing orbit-seed-gpu-ready.zip"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  import-model:
+    # Skip ordinary releases that do not include the ORBIT archive.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.release.assets.*.name, 'orbit-seed-gpu-ready.zip')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Download the ORBIT release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/orbit-import"
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "orbit-seed-gpu-ready.zip" \
+            --dir "$RUNNER_TEMP/orbit-import"
+
+      - name: Extract and validate the model files
+        env:
+          ARCHIVE: ${{ runner.temp }}/orbit-import/orbit-seed-gpu-ready.zip
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import shutil
+          import zipfile
+          from pathlib import Path, PurePosixPath
+
+          archive = Path(os.environ["ARCHIVE"])
+          destination = Path("orbit/seed_model")
+          destination.mkdir(parents=True, exist_ok=True)
+
+          if not archive.is_file():
+              raise SystemExit(f"Release archive not found: {archive}")
+
+          wanted = {"model.safetensors", "tokenizer.model"}
+          with zipfile.ZipFile(archive) as zf:
+              if zf.testzip() is not None:
+                  raise SystemExit("The ZIP archive failed its CRC check.")
+
+              matches = {name: [] for name in wanted}
+              for info in zf.infolist():
+                  if info.is_dir():
+                      continue
+                  basename = PurePosixPath(info.filename).name
+                  if basename in wanted:
+                      matches[basename].append(info)
+
+              for name in sorted(wanted):
+                  if len(matches[name]) != 1:
+                      raise SystemExit(
+                          f"Expected exactly one {name} in the ZIP; "
+                          f"found {len(matches[name])}."
+                      )
+
+                  info = matches[name][0]
+                  if info.file_size <= 0 or info.file_size > 50 * 1024 * 1024:
+                      raise SystemExit(f"Unexpected file size for {name}: {info.file_size}")
+
+                  target = destination / name
+                  with zf.open(info) as source, target.open("wb") as output:
+                      shutil.copyfileobj(source, output)
+
+                  print(f"Prepared {target} ({target.stat().st_size:,} bytes)")
+
+          model_path = destination / "model.safetensors"
+          with model_path.open("rb") as f:
+              prefix = f.read(8)
+              if len(prefix) != 8:
+                  raise SystemExit("model.safetensors is truncated.")
+              header_length = int.from_bytes(prefix, "little")
+              if header_length <= 0 or header_length > model_path.stat().st_size - 8:
+                  raise SystemExit("model.safetensors has an invalid header length.")
+              header = json.loads(f.read(header_length))
+              if not isinstance(header, dict) or not header:
+                  raise SystemExit("model.safetensors has an invalid header.")
+
+          tokenizer_path = destination / "tokenizer.model"
+          if tokenizer_path.stat().st_size < 1024:
+              raise SystemExit("tokenizer.model appears to be incomplete.")
+
+          print("Both ORBIT binary files passed basic format checks.")
+          PY
+
+      - name: Commit the binary files to main
+        env:
+          DEFAULT_BRANCH: main
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add orbit/seed_model/model.safetensors orbit/seed_model/tokenizer.model
+          if git diff --cached --quiet; then
+            echo "The model files are already up to date."
+            exit 0
+          fi
+          git commit -m "Add ORBIT Seed model binaries"
+          git push origin "HEAD:${DEFAULT_BRANCH}"
