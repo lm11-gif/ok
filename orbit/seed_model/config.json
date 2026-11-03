@@ -1,0 +1,13 @@
+{
+  "model_name": "ORBIT Seed",
+  "version": "0.1",
+  "architecture": "decoder-only causal transformer",
+  "vocab_size": 2000,
+  "block_size": 160,
+  "dim": 128,
+  "layers": 3,
+  "heads": 4,
+  "dropout": 0.06,
+  "seed": 73421,
+  "parameters": 871552
+}
