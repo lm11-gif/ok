@@ -26,7 +26,7 @@ jobs:
         with:
           ref: main
       - name: Check Python syntax
-        run: python -m py_compile orbit/cognitive/core.py orbit/cognitive/models.py orbit/cognitive/train.py
+        run: python -m py_compile orbit/cognitive/core.py orbit/cognitive/models.py orbit/cognitive/train.py orbit/cognitive/bundle_kaggle.py
       - name: Validate Kaggle credentials
         shell: bash
         run: |
@@ -45,7 +45,8 @@ jobs:
           set -euo pipefail
           KERNEL_DIR="$RUNNER_TEMP/orbit-cognitive-kernel"
           mkdir -p "$KERNEL_DIR"
-          cp orbit/cognitive/core.py orbit/cognitive/models.py orbit/cognitive/train.py "$KERNEL_DIR/"
+          python orbit/cognitive/bundle_kaggle.py --output "$KERNEL_DIR/train.py"
+          python -m py_compile "$KERNEL_DIR/train.py"
           cat > "$KERNEL_DIR/kernel-metadata.json" <<EOF
           {
             "id": "$KAGGLE_USERNAME/orbit-cognitive-v1-gpu-training",
@@ -68,21 +69,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          KERNEL_ID="$KAGGLE_USERNAME/orbit-cognitive-v1-gpu-training"
           kaggle kernels push -p "$KERNEL_DIR" --timeout 43200 --accelerator NvidiaTeslaT4
-          kaggle kernels list --mine --search "ORBIT Cognitive v1 GPU Training" --format json \
-            > "$RUNNER_TEMP/orbit-cognitive-kernels.json"
-          KERNEL_ID="$(python - "$RUNNER_TEMP/orbit-cognitive-kernels.json" <<'PY'
-          import json, sys
-          rows = json.load(open(sys.argv[1], encoding="utf-8"))
-          matches = [row for row in rows if row.get("title") == "ORBIT Cognitive v1 GPU Training"]
-          if len(matches) != 1:
-              raise SystemExit("Expected exactly one matching Kaggle kernel; found " +
-                               repr([row.get("ref") for row in matches]))
-          print(matches[0]["ref"])
-          PY
-          )"
           echo "KERNEL_ID=$KERNEL_ID" >> "$GITHUB_ENV"
-          echo "Using canonical Kaggle kernel: $KERNEL_ID"
+          echo "Submitted Kaggle kernel: $KERNEL_ID"
       - name: Wait for Kaggle training
         shell: bash
         run: |
