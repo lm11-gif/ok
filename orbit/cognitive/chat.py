@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run ORBIT Cognitive v2.2 Conversational: specialist retrieval plus a trained subword language generator."""
+"""Run ORBIT Cognitive v2.3 Conversational: specialist retrieval plus a trained subword language generator."""
 from __future__ import annotations
 import argparse
 import json
@@ -260,7 +260,7 @@ class OrbitCognitive:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", default="artifacts/orbit-cognitive-v2.2")
+    parser.add_argument("--model", default="artifacts/orbit-cognitive-v2.3")
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--max-new-tokens", type=int, default=160)
     parser.add_argument("--temperature", type=float, default=0.62)
@@ -270,7 +270,7 @@ def main():
         max_new_tokens=args.max_new_tokens, temperature=args.temperature,
     )
     parameters = sum(p.numel() for p in bot.generator.parameters())
-    print(f"ORBIT Cognitive v2.2 | conversational neural generator | {parameters:,} generator parameters")
+    print(f"ORBIT Cognitive v2.3 | conversational neural generator | {parameters:,} generator parameters")
     print("Type /reset to clear conversation history, or /exit to quit.")
     while True:
         try:
