@@ -466,7 +466,7 @@ def main():
         loss_type="sigmoid",
         max_length=512,
         max_prompt_length=256,
-        num_train_epochs=1.0,
+        num_train_epochs=2.0,
         per_device_train_batch_size=1,
         per_device_eval_batch_size=1,
         gradient_accumulation_steps=8,
@@ -522,20 +522,24 @@ def main():
     )
     tokenizer.save_pretrained(OUTPUT_DIR)
 
-    smoke_prompts = [
-        "Hi! What can you help me with?",
-        "Explain why the sky looks blue in simple terms.",
-        "Write a Python function that returns the factorial of a non-negative integer.",
-        "A game has too many active NPCs and performance is dropping. Suggest a practical design.",
-        "What should you do when you are not sure an answer is correct?",
-    ]
+    # Compare SFT and DPO on the same held-out-from-optimization prompts.
+    # These are generated from the original student drafts captured above.
+    smoke_prompts = prompts[:5]
     generations = []
     merged.eval()
-    for prompt in smoke_prompts:
+    for index, prompt in enumerate(smoke_prompts):
         formatted = make_chat_prompt(tokenizer, prompt)
         answer = generate_answer(merged, tokenizer, formatted, 160, 0)
-        generations.append({"prompt": prompt, "answer": answer})
-        print(f"SMOKE PROMPT: {prompt}\nORBIT DPO: {answer}\n", flush=True)
+        comparison = {
+            "prompt": prompt,
+            "sft_answer": drafts[index],
+            "dpo_answer": answer,
+        }
+        generations.append(comparison)
+        print(
+            f"COMPARISON PROMPT: {prompt}\nSFT: {drafts[index]}\nDPO: {answer}\n",
+            flush=True,
+        )
 
     report = {
         "name": "ORBIT Seed v0.2 DPO",
