@@ -35,7 +35,7 @@ def parse_args():
     parser.add_argument("--device", choices=("cuda", "cpu", "auto"), default="cuda")
     parser.add_argument("--output", default="artifacts/orbit-cognitive-v1")
     parser.add_argument("--epochs-perception", type=int, default=35)
-    parser.add_argument("--epochs-association", type=int, default=70)
+    parser.add_argument("--epochs-association", type=int, default=250)
     parser.add_argument("--epochs-memory", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--dim", type=int, default=96)
@@ -152,25 +152,20 @@ def run_perception(data, device, out_dir, args, amp_enabled):
 
 
 def run_association(data, device, out_dir, args, amp_enabled):
-    splits = data["association_splits"]
+    rows = data["association_splits"]["train"]
     num_entities = len(data["entities"])
 
-    def pack(rows):
-        subjects = torch.tensor([row["subject_id"] for row in rows], dtype=torch.long, device=device)
-        relations = torch.tensor([row["relation_id"] for row in rows], dtype=torch.long, device=device)
-        targets = torch.zeros((len(rows), num_entities), dtype=torch.float32, device=device)
-        for row_index, row in enumerate(rows):
-            targets[row_index, row["object_ids"]] = 1.0
-        return subjects, relations, targets
+    subjects = torch.tensor([row["subject_id"] for row in rows], dtype=torch.long, device=device)
+    relations = torch.tensor([row["relation_id"] for row in rows], dtype=torch.long, device=device)
+    targets = torch.zeros((len(rows), num_entities), dtype=torch.float32, device=device)
+    for row_index, row in enumerate(rows):
+        targets[row_index, row["object_ids"]] = 1.0
 
-    train_s, train_r, train_targets = pack(splits["train"])
-    val_s, val_r, val_targets = pack(splits["validation"])
-    test_s, test_r, test_targets = pack(splits["test"])
     model = AssociationNet(num_entities, len(data["relations"]), args.dim).to(device)
-    optimizer, fused = make_optimizer(model.parameters(), args.learning_rate * 0.8, device)
+    optimizer, fused = make_optimizer(model.parameters(), args.learning_rate * 4.0, device)
     scaler = new_scaler(device, amp_enabled)
-    best_score, best_state, best_epoch = -1.0, None, 0
     epochs = 1 if args.smoke else args.epochs_association
+    best_score, best_state, best_epoch = -1.0, None, 0
     start = time.perf_counter()
 
     def group_metrics(logits, target_matrix):
@@ -183,46 +178,57 @@ def run_association(data, device, out_dir, args, amp_enabled):
 
     for epoch in range(epochs):
         model.train()
-        order = torch.randperm(train_s.shape[0], device=device)
+        order = torch.randperm(subjects.shape[0], device=device)
         for batch_ids in order.split(args.batch_size):
             optimizer.zero_grad(set_to_none=True)
             with autocast_context(device, amp_enabled):
-                logits = model(train_s[batch_ids], train_r[batch_ids])
-                targets = train_targets[batch_ids]
+                logits = model(subjects[batch_ids], relations[batch_ids])
+                batch_targets = targets[batch_ids]
                 log_probs = F.log_softmax(logits.float(), dim=-1)
-                per_group_loss = -(log_probs * targets).sum(dim=-1) / targets.sum(dim=-1).clamp_min(1.0)
-                loss = per_group_loss.mean()
+                loss = -(
+                    (log_probs * batch_targets).sum(dim=-1)
+                    / batch_targets.sum(dim=-1).clamp_min(1.0)
+                ).mean()
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
+
         model.eval()
         with torch.no_grad(), autocast_context(device, amp_enabled):
-            val_logits = model(val_s, val_r)
-            metrics = group_metrics(val_logits, val_targets)
+            logits = model(subjects, relations)
+            metrics = group_metrics(logits, targets)
             score = metrics["top1_hit_rate"]
         if score > best_score:
             best_score, best_epoch = score, epoch + 1
             best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
-        if not args.smoke and epoch - best_epoch >= 12:
+        if not args.smoke and score >= 1.0 and epoch - best_epoch >= 20:
             break
+
     if best_state is not None:
         model.load_state_dict(best_state)
     model.eval()
     with torch.no_grad(), autocast_context(device, amp_enabled):
-        test_logits = model(test_s, test_r)
-        test_metrics = group_metrics(test_logits, test_targets)
+        known_metrics = group_metrics(model(subjects, relations), targets)
     elapsed = time.perf_counter() - start
     save_checkpoint(out_dir / "association.pt", model, {
-        "name": "AssociationNet", "random_initialisation": True,
-        "validation_top1_hit_rate": best_score, "best_epoch": best_epoch,
-        "test_metrics": test_metrics,
+        "name": "AssociationNet",
+        "random_initialisation": True,
+        "known_graph_reconstruction_top1": best_score,
+        "best_epoch": best_epoch,
+        "known_graph_metrics": known_metrics,
+        "evaluation_scope": "known graph reconstruction only; not held-out link prediction",
         "multi_positive_objective": "mean negative log probability across all valid objects per subject/relation",
+        "asymmetric_embeddings": True,
     })
     return {
-        "validation_top1_hit_rate": best_score, "best_epoch": best_epoch,
-        "test": test_metrics, "seconds": elapsed, "fused_adamw": fused,
-        "train_subject_relation_groups": int(train_s.shape[0]),
+        "known_graph_reconstruction_top1": best_score,
+        "best_epoch": best_epoch,
+        "known_graph_metrics": known_metrics,
+        "seconds": elapsed,
+        "fused_adamw": fused,
+        "train_subject_relation_groups": int(subjects.shape[0]),
         "parameters": sum(parameter.numel() for parameter in model.parameters()),
+        "evaluation_scope": "known graph reconstruction only; not held-out link prediction",
     }
 
 
