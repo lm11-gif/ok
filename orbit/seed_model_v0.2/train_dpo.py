@@ -2,6 +2,7 @@
 """Teacher-supervised preference generation and DPO for ORBIT Seed v0.2.
 
   Uses a sequential teacher-generation then DPO-training schedule to fit a T4.
+  Preference data is retained in the output archive for human inspection.
 """
 
 from __future__ import annotations
