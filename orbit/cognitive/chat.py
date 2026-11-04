@@ -13,7 +13,7 @@ except ImportError:
     from models import PerceptionNet, AssociationNet, MemoryNet
 
 ANSWER_FORMS = {
-    "is_a": "{s} is a {o}.", "made_of": "{s} is made of {o}.",
+    "is_a": "{s} is {o}.", "made_of": "{s} is made of {o}.",
     "falls_from": "{s} falls from {o}.", "located_in": "{s} is found in {o}.",
     "produces": "{s} produces {o}.", "used_for": "{s} is used for {o}.",
     "powered_by": "{s} is powered by {o}.", "contains": "{s} contains {o}.",
@@ -24,6 +24,77 @@ ANSWER_FORMS = {
     "has_property": "One property of {s} is that it is {o}.",
     "connects": "{s} connects {o}.",
 }
+
+RELATION_CUES = [
+    ("falls_from", ("falls from", "fall from", "descends from")),
+    ("made_of", ("made of", "consists of", "consist of", "composition")),
+    ("flows_into", ("flows into", "flow into", "drains into", "drain into", "flows", "flow")),
+    ("powered_by", ("powered by", "power source", "what powers", "what runs")),
+    ("used_for", ("used for", "purpose", "what can i do with")),
+    ("has_property", ("property", "characteristic", "feature", "what is like")),
+    ("needs", ("need", "needs", "require", "requires", "necessary", "essential", "depend on")),
+    ("absorbs", ("absorb", "absorbs", "takes in", "soaks up")),
+    ("stores", ("store", "stores", "stored", "saved in", "holds")),
+    ("contains", ("contain", "contains", "inside", "components", "parts")),
+    ("performs", ("perform", "performs", "operation", "function")),
+    ("part_of", ("part of", "belongs to", "included in")),
+    ("orbits", ("orbit", "orbits", "revolve around", "goes around")),
+    ("causes", ("cause", "causes", "effect", "result from")),
+    ("connects", ("connect", "connects", "linked", "joins", "join")),
+    ("produces", ("produce", "produces", "generates", "creates", "create", "output")),
+    ("located_in", ("where", "located", "found in", "environment", "which place")),
+    ("is_a", ("what is", "what are", "define", "classified", "classify", "category", "what kind", "what type")),
+]
+
+UNCOUNTABLE_IS_A_OBJECTS = {
+    "precipitation", "furniture", "water", "oxygen", "computation",
+    "transportation", "persistent data", "temporary data", "software development",
+}
+
+def entity_aliases(entity: str) -> set[str]:
+    """Return a concept's exact and simple plural surface forms."""
+    phrase = " ".join(entity.lower().replace("_", " ").split())
+    aliases = {phrase}
+    words = phrase.split()
+    if not words:
+        return aliases
+    last = words[-1]
+    if last.endswith("y") and len(last) > 1 and last[-2] not in "aeiou":
+        plural = last[:-1] + "ies"
+    elif last.endswith(("s", "x", "z", "ch", "sh")):
+        plural = last + "es"
+    else:
+        plural = last + "s"
+    aliases.add(" ".join(words[:-1] + [plural]))
+    return aliases
+
+def find_mentioned_entities(question: str, entities: list[str]) -> list[int]:
+    normalised = " ".join(question.lower().replace("_", " ").split())
+    matches = []
+    for idx, entity in enumerate(entities):
+        for alias in entity_aliases(entity):
+            if re.search(r"\b" + re.escape(alias) + r"\b", normalised):
+                matches.append(idx)
+                break
+    return matches
+
+def relation_hint(question: str, relations: list[str]) -> str | None:
+    """Use explicit wording as a symbolic routing hint; neural perception remains the fallback."""
+    normalised = " ".join(question.lower().replace("_", " ").split())
+    available = set(relations)
+    for relation, cues in RELATION_CUES:
+        if relation in available and any(
+            re.search(r"\b" + re.escape(cue) + r"\b", normalised) for cue in cues
+        ):
+            return relation
+    return None
+
+def compose_is_a(subject: str, object_text: str) -> str:
+    if object_text in UNCOUNTABLE_IS_A_OBJECTS:
+        return f"{subject} is {object_text}."
+    first_word = object_text.split()[0] if object_text else ""
+    article = "an" if first_word[:1] in "aeiou" else "a"
+    return f"{subject} is {article} {object_text}."
 
 def load_checkpoint(path: Path, model, device):
     state = torch.load(path, map_location=device)
@@ -74,11 +145,7 @@ class OrbitCognitive:
         return " ".join(text.lower().replace("_", " ").split())
 
     def _mentioned_entities(self, question: str):
-        normalised = self._normalise(question)
-        return [
-            idx for idx, entity in enumerate(self.entities)
-            if re.search(r"\b" + re.escape(entity.replace("_", " ")) + r"\b", normalised)
-        ]
+        return find_mentioned_entities(question, self.entities)
 
     @torch.inference_mode()
     def answer(self, question: str) -> str:
@@ -93,8 +160,15 @@ class OrbitCognitive:
         relation_probs = relation_logits.softmax(dim=-1)[0]
         subject_id = max(matches, key=lambda idx: float(subject_probs[idx].item()))
         subject_conf = float(subject_probs[subject_id].item())
-        relation_id = int(relation_probs.argmax().item())
-        relation_conf = float(relation_probs[relation_id].item())
+        predicted_relation_id = int(relation_probs.argmax().item())
+        predicted_relation_conf = float(relation_probs[predicted_relation_id].item())
+        hinted_relation = relation_hint(question, self.relations)
+        if hinted_relation is not None:
+            relation_id = self.relations.index(hinted_relation)
+            relation_conf = 1.0
+        else:
+            relation_id = predicted_relation_id
+            relation_conf = predicted_relation_conf
         candidate_ids = [i for i, sid in enumerate(self.fact_subject_ids) if sid == subject_id]
         if not candidate_ids:
             return f"I recognise {self.entities[subject_id].replace('_', ' ')}, but I have no stored facts about it."
@@ -140,7 +214,10 @@ class OrbitCognitive:
         else:
             object_text = ", ".join(objects[:-1]) + " and " + objects[-1]
         template = ANSWER_FORMS.get(fact["relation"], "{s} is related to {o}.")
-        answer = template.format(s=subject, o=object_text)
+        if fact["relation"] == "is_a":
+            answer = compose_is_a(subject, object_text)
+        else:
+            answer = template.format(s=subject, o=object_text)
         return answer + f" [retrieved fact similarity: {best_similarity:.2f}]"
 
 
