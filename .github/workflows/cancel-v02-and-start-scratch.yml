@@ -30,6 +30,7 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
+          import inspect
           from kaggle.api.kaggle_api_extended import KaggleApi
           from kagglesdk.kernels.types.kernels_api_service import ApiCancelKernelSessionRequest
 
@@ -38,7 +39,12 @@ jobs:
           session_id = 2
           api = KaggleApi()
           api.authenticate()
-          request = ApiCancelKernelSessionRequest(session_id)
+          signature = inspect.signature(ApiCancelKernelSessionRequest)
+          fields = [name for name in signature.parameters if "session" in name.lower()]
+          print(f"Installed Kaggle cancel request signature: {signature}")
+          if len(fields) != 1:
+              raise RuntimeError(f"Cannot identify the session-id field: {fields}")
+          request = ApiCancelKernelSessionRequest(**{fields[0]: session_id})
           with api.build_kaggle_client() as client:
               client.kernels.kernels_api_client.cancel_kernel_session(request)
           print(f"Cancellation request accepted by Kaggle for session {session_id}.")
