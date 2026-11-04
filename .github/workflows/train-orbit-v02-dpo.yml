@@ -54,7 +54,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "\${KAGGLE_API_TOKEN:-}" || -z "\${KAGGLE_USERNAME:-}" ]]; then
+          if [[ -z "${KAGGLE_API_TOKEN:-}" || -z "${KAGGLE_USERNAME:-}" ]]; then
             echo "::error::Add KAGGLE_API_TOKEN and KAGGLE_USERNAME in repository Actions secrets."
             exit 1
           fi
