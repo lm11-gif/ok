@@ -20,10 +20,10 @@ def main() -> None:
     trainer = strip_future_import((root / "train.py").read_text(encoding="utf-8"))
 
     import_block = """try:
-    from .core import build_seed_data, encode_examples, encode_facts
+    from .core import build_seed_data, encode_examples, encode_facts, encode_text
     from .models import PerceptionNet, AssociationNet, MemoryNet
 except ImportError:  # Kaggle script mode: modules are side-by-side.
-    from core import build_seed_data, encode_examples, encode_facts
+    from core import build_seed_data, encode_examples, encode_facts, encode_text
     from models import PerceptionNet, AssociationNet, MemoryNet
 """
     if import_block not in trainer:
