@@ -983,20 +983,12 @@ def assistant_target_mask(
     return torch.tensor(mask, dtype=torch.bool)
 
 
-def _language_batch(
+def _prepare_language_sampler(
     sequences: list[torch.Tensor],
     target_masks: list[torch.Tensor],
     block_size: int,
-    batch_size: int,
-    pad_id: int,
-    device: torch.device,
-    assistant_only: bool = True,
-):
-    """Sample document-local windows; choose assistant-only or full-transcript targets."""
-
-    inputs = torch.full((batch_size, block_size), pad_id, dtype=torch.long, device=device)
-    targets = torch.full_like(inputs, pad_id)
-    loss_masks = torch.zeros((batch_size, block_size), dtype=torch.bool, device=device)
+) -> list[tuple[torch.Tensor, torch.Tensor, int, torch.Tensor]]:
+    """Precompute eligible target positions once instead of rescanning the corpus per batch."""
     eligible = []
     for sequence, target_mask in zip(sequences, target_masks):
         max_start = max(0, int(sequence.numel()) - block_size - 1)
@@ -1007,7 +999,26 @@ def _language_batch(
         if valid_positions.numel():
             eligible.append((sequence, target_mask, max_start, valid_positions))
     if not eligible:
-        raise RuntimeError("No sequence contains an assistant reply target within the context window.")
+        raise RuntimeError("No sequence contains a target within the context window.")
+    return eligible
+
+
+def _language_batch(
+    sequences: list[torch.Tensor],
+    target_masks: list[torch.Tensor],
+    block_size: int,
+    batch_size: int,
+    pad_id: int,
+    device: torch.device,
+    assistant_only: bool = True,
+    eligible: list[tuple[torch.Tensor, torch.Tensor, int, torch.Tensor]] | None = None,
+):
+    """Sample document-local windows using precomputed eligible target positions."""
+    inputs = torch.full((batch_size, block_size), pad_id, dtype=torch.long, device=device)
+    targets = torch.full_like(inputs, pad_id)
+    loss_masks = torch.zeros((batch_size, block_size), dtype=torch.bool, device=device)
+    if eligible is None:
+        eligible = _prepare_language_sampler(sequences, target_masks, block_size)
 
     for row in range(batch_size):
         sequence, target_mask, max_start, positions = eligible[random.randrange(len(eligible))]
@@ -1110,6 +1121,12 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
 
     train_sequences, train_masks = encode_documents(train_documents)
     validation_sequences, validation_masks = encode_documents(validation_documents)
+    train_sampler = _prepare_language_sampler(
+        train_sequences, train_masks, args.generator_block_size
+    )
+    validation_sampler = _prepare_language_sampler(
+        validation_sequences, validation_masks, args.generator_block_size
+    )
     config = {
         "vocab_size": tokenizer.vocab_size,
         "pad_id": tokenizer.PAD_ID,
@@ -1155,6 +1172,7 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
             inputs, targets, loss_mask = _language_batch(
                 train_sequences, train_masks, config["block_size"], batch_size,
                 tokenizer.PAD_ID, device, assistant_only=assistant_only,
+                eligible=train_sampler,
             )
             optimizer.zero_grad(set_to_none=True)
             with autocast_context(device, amp_enabled):
@@ -1175,7 +1193,7 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
             for _ in range(validation_batches):
                 inputs, targets, loss_mask = _language_batch(
                     validation_sequences, validation_masks, config["block_size"], batch_size,
-                    tokenizer.PAD_ID, device,
+                    tokenizer.PAD_ID, device, eligible=validation_sampler,
                 )
                 with autocast_context(device, amp_enabled):
                     logits = model(inputs)
