@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Interactive inference for ORBIT Cognitive v1."""
 from __future__ import annotations
-import argparse, json
+import argparse, json, re
 from pathlib import Path
 import torch
 
@@ -61,8 +61,10 @@ class OrbitCognitive:
 
     def _mentioned_entities(self, question: str):
         normalised = self._normalise(question)
-        return [idx for idx, entity in enumerate(self.entities)
-                if entity.replace("_", " ") in normalised]
+        return [
+            idx for idx, entity in enumerate(self.entities)
+            if re.search(r"\\b" + re.escape(entity.replace("_", " ")) + r"\\b", normalised)
+        ]
 
     @torch.inference_mode()
     def answer(self, question: str) -> str:
