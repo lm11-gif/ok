@@ -23,10 +23,10 @@ import torch
 import torch.nn.functional as F
 
 try:
-    from .core import build_seed_data, encode_examples, encode_facts
+    from .core import build_seed_data, encode_examples, encode_facts, encode_text
     from .models import PerceptionNet, AssociationNet, MemoryNet
 except ImportError:  # Kaggle script mode: modules are side-by-side.
-    from core import build_seed_data, encode_examples, encode_facts
+    from core import build_seed_data, encode_examples, encode_facts, encode_text
     from models import PerceptionNet, AssociationNet, MemoryNet
 
 
@@ -239,11 +239,7 @@ def run_memory(data, device, out_dir, args, amp_enabled):
     encoded = {}
     for split in ("train", "validation", "test"):
         rows = data["examples"][split]
-        x = np.stack([__import__("core").encode_text(row["text"], data["vocab"]) for row in rows]) \
-            if rows and "core" in __import__("sys").modules else None
-        if x is None:
-            from core import encode_text as _encode_text
-            x = np.stack([_encode_text(row["text"], data["vocab"]) for row in rows])
+        x = np.stack([encode_text(row["text"], data["vocab"]) for row in rows])
         targets = torch.zeros((len(rows), num_facts), dtype=torch.float32, device=device)
         for row_index, row in enumerate(rows):
             targets[row_index, row["fact_ids"]] = 1.0
