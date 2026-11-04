@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run ORBIT Cognitive v2: specialist retrieval plus a trained neural language generator."""
+"""Run ORBIT Cognitive v2.1: specialist retrieval plus a trained subword language generator."""
 from __future__ import annotations
 import argparse
 import json
@@ -9,10 +9,12 @@ import torch
 
 try:
     from .core import encode_text, encode_facts, QUESTION_TEMPLATES
-    from .models import PerceptionNet, AssociationNet, MemoryNet, NeuralLanguageGenerator
+    from .models import PerceptionNet, AssociationNet, MemoryNet
+    from .language import VocabularyTokenizer, NeuralLanguageGenerator
 except ImportError:
     from core import encode_text, encode_facts, QUESTION_TEMPLATES
-    from models import PerceptionNet, AssociationNet, MemoryNet, NeuralLanguageGenerator
+    from models import PerceptionNet, AssociationNet, MemoryNet
+    from language import VocabularyTokenizer, NeuralLanguageGenerator
 
 LANGUAGE_SYSTEM_PROMPT = (
     "You are ORBIT, an experimental AI assistant. Respond naturally and directly. "
@@ -137,6 +139,15 @@ class OrbitCognitive:
                 "This chat runner needs an ORBIT Cognitive v2 archive containing "
                 "generator.pt. The older v1 archive contains retrieval networks only."
             )
+        tokenizer_path = model_dir / "tokenizer.json"
+        if not tokenizer_path.is_file():
+            raise RuntimeError(
+                "This ORBIT Cognitive v2.1 archive is missing tokenizer.json. "
+                "Use the matching v2.1 model ZIP rather than the older byte-level v2 ZIP."
+            )
+        self.language_tokenizer = VocabularyTokenizer.load(tokenizer_path)
+        if int(generator_config["vocab_size"]) != self.language_tokenizer.vocab_size:
+            raise RuntimeError("Generator checkpoint and tokenizer vocabulary do not match.")
         self.generator = NeuralLanguageGenerator(generator_config).to(self.device)
         load_checkpoint(model_dir / "generator.pt", self.generator, self.device)
         self.max_new_tokens = max(1, int(max_new_tokens))
@@ -231,8 +242,9 @@ class OrbitCognitive:
             f"<|user|> {question}\n<|context|> {context}\n<|assistant|>"
         )
         response = self.generator.generate(
-            prompt, max_new_tokens=self.max_new_tokens,
-            temperature=self.temperature, top_k=40,
+            prompt, self.language_tokenizer,
+            max_new_tokens=self.max_new_tokens,
+            temperature=self.temperature, top_k=40, top_p=0.92,
         )
         if not response:
             response = "I do not have enough information to give a useful answer yet."
@@ -256,7 +268,7 @@ def main():
         max_new_tokens=args.max_new_tokens, temperature=args.temperature,
     )
     parameters = sum(p.numel() for p in bot.generator.parameters())
-    print(f"ORBIT Cognitive v2 | neural byte-level generator | {parameters:,} generator parameters")
+    print(f"ORBIT Cognitive v2.1 | neural subword generator | {parameters:,} generator parameters")
     print("Type /reset to clear conversation history, or /exit to quit.")
     while True:
         try:
