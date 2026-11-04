@@ -271,16 +271,26 @@ def build_seed_data() -> dict[str, Any]:
                     "fact_id": fact["id"],
                 })
 
-    # Deterministic edge split prevents the association model from seeing every
-    # positive triple during fitting. Facts remain in memory for retrieval.
+    # Group edges by subject/relation so a pair may have multiple valid objects
+    # (for example, a tree needs both water and sunlight). Split whole groups to
+    # prevent one object in a group leaking into train while another is held out.
+    grouped: dict[tuple[int, int], set[int]] = {}
+    for fact in facts:
+        key = (fact["subject_id"], fact["relation_id"])
+        grouped.setdefault(key, set()).add(fact["object_id"])
+    group_rows = [
+        {"subject_id": subject_id, "relation_id": relation_id,
+         "object_ids": sorted(object_ids)}
+        for (subject_id, relation_id), object_ids in grouped.items()
+    ]
     rng = np.random.default_rng(20261104)
-    edge_order = rng.permutation(len(facts)).tolist()
-    n_train = max(1, int(len(facts) * 0.80))
-    n_val = max(1, int(len(facts) * 0.10))
+    group_order = rng.permutation(len(group_rows)).tolist()
+    n_train = max(1, int(len(group_rows) * 0.80))
+    n_val = max(1, int(len(group_rows) * 0.10))
     assoc = {
-        "train": [facts[i] for i in edge_order[:n_train]],
-        "validation": [facts[i] for i in edge_order[n_train:n_train + n_val]],
-        "test": [facts[i] for i in edge_order[n_train + n_val:]],
+        "train": [group_rows[i] for i in group_order[:n_train]],
+        "validation": [group_rows[i] for i in group_order[n_train:n_train + n_val]],
+        "test": [group_rows[i] for i in group_order[n_train + n_val:]],
     }
     return {
         "facts": facts,
