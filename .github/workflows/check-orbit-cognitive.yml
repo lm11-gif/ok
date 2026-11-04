@@ -11,7 +11,7 @@ on:
       - ".github/workflows/check-orbit-cognitive.yml"
   workflow_dispatch:
 concurrency:
-  group: orbit-cognitive-ci-${{ github.ref }}
+  group: orbit-cognitive-ci-v2-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
