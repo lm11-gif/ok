@@ -1113,6 +1113,7 @@ def write_runtime_package(output: Path) -> list[str]:
         "=================================================\n\n"
         "This archive contains trained checkpoints, the neural language generator, "
         "configuration, fact memory, and the Python files needed to run the model.\n\n"
+        "Training data attribution and licences are listed in DATA_SOURCES.txt.\n\n"
         "Requirements: Python 3.10 or newer, PyTorch, and NumPy. Dependencies are "
         "not installed automatically. Use the Python environment where you already "
         "installed PyTorch and NumPy.\n\n"
@@ -1121,6 +1122,24 @@ def write_runtime_package(output: Path) -> list[str]:
         "NVIDIA CUDA: python chat.py --model . --device cuda\n\n"
         "Type /reset to clear conversation history and /exit to quit. The model is "
         "experimental and may produce incoherent or incorrect answers.\n",
+        encoding="utf-8",
+    )
+    (output / "DATA_SOURCES.txt").write_text(
+        "ORBIT Cognitive v2.2 training data sources\n"
+        "==========================================\n\n"
+        "OpenAssistant OASST1\n"
+        "Licence: Apache-2.0\n"
+        "Dataset: https://huggingface.co/datasets/OpenAssistant/oasst1\n"
+        "Pinned revision: fdf72ae0827c1cda404aff25b6603abec9e3399b\n"
+        "Only English, non-deleted, non-synthetic, review-approved messages from ready-for-export trees are used.\n\n"
+        "English Daily Dialogues 10K\n"
+        "Author: Enes Deniz\n"
+        "Licence: CC-BY-4.0\n"
+        "Dataset: https://huggingface.co/datasets/3nesdeniz/english-daily-dialogues-10k\n"
+        "Pinned revision: 97e96d244d20c8970ac5be707cb89e5f94253357\n"
+        "Synthetic multi-turn dialogues; health/wellness and shopping/errands domains are excluded.\n\n"
+        "The exact downloaded split checksums and row counts are recorded in training_report.json.\n"
+        "ORBIT student model weights are randomly initialised; no pretrained model weights are loaded.\n",
         encoding="utf-8",
     )
     (output / "run_orbit.bat").write_text(
@@ -1197,7 +1216,7 @@ def main():
         "entity_count": len(data["entities"]),
         "relation_count": len(data["relations"]),
         "fact_count": len(data["facts"]),
-        "language_generator": {"block_size": args.generator_block_size, "dim": args.generator_dim, "layers": args.generator_layers, "heads": args.generator_heads, "dropout": 0.10, "tokenizer": VocabularyTokenizer.FORMAT, "from_scratch": True, "block_size": args.generator_block_size},
+        "language_generator": {"block_size": args.generator_block_size, "dim": args.generator_dim, "layers": args.generator_layers, "heads": args.generator_heads, "dropout": 0.10, "tokenizer": VocabularyTokenizer.FORMAT, "from_scratch": True},
         "seed": args.seed,
         "device": device_name,
         "device_memory_gb": device_memory_gb,
@@ -1261,7 +1280,7 @@ def main():
     }
     (output / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
     packaged_sources = write_runtime_package(output)
-    report["runtime_files"] = packaged_sources + ["README.txt", "run_orbit.bat"]
+    report["runtime_files"] = packaged_sources + ["README.txt", "DATA_SOURCES.txt", "run_orbit.bat"]
     (output / "training_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     archive = output.parent / f"{output.name}.zip"
