@@ -9,7 +9,7 @@ separate ORBIT Seed and ORBIT Cognitive model experiments.
 - [ORBIT Seed v0.1](orbit/seed_model/README.md) — the original 871k-parameter model trained from random initialization. It is an educational prototype, not a coherent general-purpose assistant.
 - [ORBIT Seed v0.2](orbit/seed_model_v0.2/README.md) — a separate conversational model fine-tuned from pretrained SmolLM2-360M. This version is **not** scratch-trained.
 - [ORBIT Seed v0.3 Scratch](orbit/seed_model_v0.3_scratch/README.md) — a separate model with random student-weight initialization, its own tokenizer, FineWeb-Edu pretraining, assistant tuning, and a scratch-specific teacher DPO stage.
-- [ORBIT Cognitive v2.2 Conversational](orbit/cognitive/README.md) — the active conversational rebuild: assistant-only training targets, reconstructed multi-turn histories, a larger context, public dialogue datasets and held-out conversation evaluation. Its GPU run is pending CI; v2.1 remains the latest published Cognitive release until v2.2 is trained and evaluated.
+- [ORBIT Cognitive v2.3 Conversational Candidate](orbit/cognitive/README.md) — a stronger scratch-trained branch adding UltraChat multi-turn dialogue, transcript-language warmup followed by assistant-focused training, and autoregressive conversation rollouts. v2.2 remains a separate in-progress baseline; v2.1 is the latest published Cognitive release.
 
 ## Model lineage
 
@@ -23,7 +23,8 @@ These are separate experiments, not successive checkpoints of one model. In part
 | Cognitive v1 | Random | Three specialist networks and a small seed knowledge graph; historical release |
 | Cognitive v2 | Random | Byte-level causal language generator; historical baseline, with poor observed text coherence |
 | Cognitive v2.1 | Random | Learned word-piece generator trained on a small authored corpus; still incoherent on direct tests |
-| Cognitive v2.2 Conversational | Random | Assistant-only causal language modelling on reconstructed multi-turn OASST1 and Daily Dialogues, with conversation-level holdouts |
+| Cognitive v2.2 Conversational | Random | Assistant-only causal language modelling on OASST1 and Daily Dialogues, with conversation-level holdouts |
+| Cognitive v2.3 Candidate | Random | Transcript-language warmup, assistant-focused fine-tuning, OASST1 + Daily Dialogues + sampled UltraChat 200k, autoregressive multi-turn rollout evaluation |
 | Cognitive v2.1 | Random | Learned word/punctuation vocabulary with UTF-8 byte fallback; document-isolated next-token training and generated-answer evaluation |
 
 For Seed v0.3, SmolLM3-3B is used only to generate additional training and preference text. Its pretrained weights are not loaded into the ORBIT student. The v0.3 configuration and training report explicitly record that the student is scratch-initialized.
@@ -41,7 +42,7 @@ For Cognitive v2.1, all four neural networks (PerceptionNet, AssociationNet, Mem
 
 The v0.3 scratch training workflow is configured to run after the current v0.2 fine-tuning/DPO sequence completes, to avoid two Kaggle jobs competing for the same free GPU allocation. It can also be started manually from GitHub Actions.
 
-The Cognitive v2.1 GPU training run completed and its release is preserved. The v2.2 conversational rebuild is in progress: it adds public dialogue datasets and assistant-only loss, and will publish a separate release only after the new GPU run and generated conversation samples are evaluated. Older releases are not overwritten.
+The Cognitive v2.1 GPU training run completed and its release is preserved. The v2.2 baseline training job is still in progress. A separate v2.3 branch adds UltraChat and a two-stage language objective; it will be released only as an experimental prerelease after its GPU job and generated conversation rollouts are reviewed.
 
 ## Important limitations
 
