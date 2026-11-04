@@ -64,7 +64,7 @@ jobs:
           path = os.path.join(os.environ["RUNNER_TEMP"], "orbit-cognitive-smoke.zip")
           with zipfile.ZipFile(path) as z:
               names = set(z.namelist())
-              required = {"perception.pt", "association.pt", "memory.pt", "generator.pt", "config.json", "training_report.json", "chat.py", "core.py", "models.py", "language.py", "tokenizer.json", "README.txt", "run_orbit.bat"}
+              required = {"perception.pt", "association.pt", "memory.pt", "generator.pt", "config.json", "training_report.json", "chat.py", "core.py", "models.py", "language.py", "tokenizer.json", "README.txt", "DATA_SOURCES.txt", "run_orbit.bat"}
               missing = required - names
               if missing:
                   raise SystemExit(f"Missing smoke archive files: {sorted(missing)}")
@@ -73,6 +73,7 @@ jobs:
               assert report["all_students_randomly_initialised"] is True
               assert report["config"]["language_generator"]["from_scratch"] is True
               assert "run_orbit.bat" in report["runtime_files"]
+              assert "DATA_SOURCES.txt" in report["runtime_files"]
               with tempfile.TemporaryDirectory() as folder:
                   z.extractall(folder)
                   result = subprocess.run(
