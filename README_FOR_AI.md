@@ -356,80 +356,74 @@ Do not silently replace the v0.3 random-init student with SmolLM2/SmolLM3 weight
 
 ## 10. ORBIT Cognitive v1 — implementation and GPU training
 
-The first implementation is committed under `orbit/cognitive/`. It has completed one real GPU training run and a passing CI smoke suite. The source has since been changed to correct multi-answer training and association modelling; a follow-up CI run is in progress, and the updated weights must be retrained after that CI passes.
+The initial implementation, two Kaggle GPU runs, and a model release are complete. The latest chat-controller refinements and tests are in CI. The current released weights are trained with the asymmetric AssociationNet and multi-positive MemoryNet objectives.
 
-### Files
+### Repository files
 
-- `orbit/cognitive/COGNITIVE_ARCHITECTURE.md` — design and implementation record.
-- `orbit/cognitive/README.md` — install, train, use, limitations, and first-run measurements.
-- `orbit/cognitive/core.py` — curated seed knowledge graph, vocabulary, deterministic question generation, grouped facts.
-- `orbit/cognitive/models.py` — PerceptionNet, asymmetric AssociationNet, and MemoryNet.
-- `orbit/cognitive/train.py` — staged training, CUDA checks, validation, timing, checkpoints, and archive creation.
-- `orbit/cognitive/chat.py` — inference controller and cautious template answer composition; includes migration from the first AssociationNet checkpoint format.
-- `orbit/cognitive/bundle_kaggle.py` — builds a self-contained Kaggle script. Kaggle script mode did not import adjacent `.py` modules.
-- `orbit/cognitive/tests/test_cognitive.py` — data, multi-positive supervision, and module-shape tests.
-- `.github/workflows/check-orbit-cognitive.yml` — syntax, unit, bundled-script CPU smoke training, inference, and zip validation.
-- `.github/workflows/train-orbit-cognitive-kaggle.yml` — manual-only Kaggle T4 training, direct canonical kernel ID, output validation, Actions artifact upload, then release publication.
-- `.github/workflows/recover-orbit-cognitive-kaggle.yml` — monitor/recover an already-submitted kernel; it must not submit another GPU job.
-- `orbit/cognitive/START_TRAINING.txt` — manual GPU training trigger.
+- orbit/cognitive/README.md — end-user instructions, run metrics, limits.
+- orbit/cognitive/COGNITIVE_ARCHITECTURE.md — design and implementation history.
+- orbit/cognitive/core.py — 67-fact seed graph, shared vocabulary/entity/relation IDs, multi-fact grouping, deterministic question templates.
+- orbit/cognitive/models.py — PerceptionNet, asymmetric AssociationNet, MemoryNet.
+- orbit/cognitive/train.py — GPU training, timing/throughput reporting, validation, checkpoint saving, archive generation.
+- orbit/cognitive/chat.py — inference/controller code; singular/plural entity matching, symbolic relation hints, association+memory ranking, template response composition.
+- orbit/cognitive/bundle_kaggle.py — self-contained Kaggle script builder. Kaggle script mode did not automatically expose adjacent .py files.
+- orbit/cognitive/tests/test_cognitive.py — unit tests for seed data, multi-positive targets, module shapes, plural entities, relation cues, and natural definition articles.
+- .github/workflows/check-orbit-cognitive.yml — CPU-only CI: compilation, unit tests, bundled-script smoke training, checkpoint load/inference, archive validation.
+- .github/workflows/train-orbit-cognitive-kaggle.yml — manual Kaggle T4 training, archive validation, Actions artifact upload, release publishing.
+- .github/workflows/recover-orbit-cognitive-kaggle.yml — monitor/retrieve an already-submitted Kaggle kernel; it does not submit a new training job.
 
-### Network roles and current training objectives
+### Architecture and objectives
 
-- **PerceptionNet:** predicts subject concept ID and relation ID from question tokens.
-- **AssociationNet:** asymmetric bilinear scorer with separate subject and object embeddings. It trains on multi-positive object sets for every subject/relation pair in the entire known graph. Its score is explicitly a known-graph reconstruction score—not held-out link-prediction/generalisation.
-- **MemoryNet:** ranks fact records from a natural-language query. Every question row stores all valid matching fact IDs in `fact_ids`, and the loss/Recall@k treats all those records as positive.
-- Controller: whole-word entity matching, perception relation filtering, association contribution to ranking, retrieval, and constrained template output. It returns all matching valid facts for multi-answer prompts; unknown concepts or unsupported subject/relation combinations should be rejected.
+All three student networks are randomly initialised; no pretrained weights, embeddings, hidden states, or teacher model are loaded.
 
-The seed graph is a small manually curated starter graph (the first run reported 67 facts, 67 entities, 18 relations). Question examples come from deterministic templates. This is a bootstrapping benchmark, not broad world knowledge. Template-held-out scores do not measure unrestricted language understanding. Association graph reconstruction is an in-sample memorisation/cache task. Do not present either metric as general reasoning.
+- PerceptionNet: predicts subject entity and relation from question tokens.
+- AssociationNet: asymmetric bilinear scoring with independent subject/object tables. It trains on multi-positive objects for all subject/relation pairs in the known graph.
+- MemoryNet: ranks fact records for a query. Every valid fact ID for a subject/relation is a positive target, so a query can have several correct answers.
+- Controller: exact word-boundary concept matching with simple plural aliases, explicit relation wording hints plus neural fallback, association-assisted ranking of relevant stored facts, and constrained answer templates.
 
-All student networks are randomly initialised. No pretrained weights, hidden states, pretrained embeddings, or teacher model are loaded.
+The seed graph contains 67 facts, 67 entities, and 18 relations. There are 59 subject/relation groups. The starter dataset and question templates are intentionally small. Perception and Memory test queries are held-out template variants over facts already in the graph. Association uses all 59 subject/relation groups for training and reconstruction evaluation; its 100% score is in-sample graph memorisation, not held-out link-prediction/generalisation. Never present these synthetic-template metrics as broad intelligence or factual reasoning benchmarks.
 
-### Speed choices
+### Latest successful GPU run and release
 
-- Tokenise once and keep compact tensors resident on GPU.
-- Batch size 256 for lower Python/kernel-launch overhead.
-- CUDA FP16 autocast + GradScaler.
-- Fused AdamW where supported.
-- TF32 only on Ampere+ (the Tesla T4 is compute capability 7.5, so TF32 was correctly off).
-- Vectorised MemoryNet query-to-all-facts scores.
-- Sequential specialists in one GPU process.
-- Early stopping and best-validation checkpoint retention.
-- CUDA synchronisation at timing boundaries so per-stage runtime and throughput are measured after queued GPU work completes.
-- `torch.compile` remains disabled because compile overhead could exceed gains for these small models.
-- CI installs CPU-only PyTorch; Kaggle uses its preinstalled CUDA-enabled PyTorch.
+GitHub Actions run [41764168830](https://github.com/lm11-gif/ok/actions/runs/41764168830) succeeded and updated the [orbit-cognitive-v1 GitHub release](https://github.com/lm11-gif/ok/releases/tag/orbit-cognitive-v1). The workflow downloaded and verified the model archive, uploaded a durable Actions artifact, and uploaded the ZIP, report, and config to the release.
 
-### First successful T4 run — historical baseline
-
-GitHub Actions run [41763096394](https://github.com/lm11-gif/ok/actions/runs/41763096394) completed successfully and published [the initial ORBIT Cognitive v1 release](https://github.com/lm11-gif/ok/releases/tag/orbit-cognitive-v1).
-
-Verified output:
-- GPU: NVIDIA Tesla T4, reported 14.56 GB device memory.
-- PyTorch: 2.11.0+cu130; CUDA 13.0.
-- FP16 autocast and fused AdamW were active.
-- Total measured training time: 7.84 seconds.
+GPU/runtime:
+- NVIDIA Tesla T4, 14.56 GB reported memory, compute capability 7.5.
+- PyTorch 2.11.0+cu130, CUDA 13.0.
+- FP16 autocast enabled; fused AdamW active.
+- TF32 disabled because T4 is compute capability 7.5.
+- Batch size 256; tokenised tensors kept on GPU; retrieval is vectorised; models train sequentially in one process.
+- Total trainer-reported time: 6.776 s.
 - Peak allocated GPU memory: 0.029 GB.
-- PerceptionNet: test subject accuracy 1.0 and relation accuracy about 0.7537.
-- Initial AssociationNet held-out top-1 hit rate was 0.0 and top-5 hit rate about 0.1538. The symmetric shared subject/object embedding and tiny graph split were inadequate.
-- Initial MemoryNet test Recall@1 was about 0.5672 and Recall@5 about 0.9776, but each question was labelled with one fact at a time even when several answers were correct. These old retrieval numbers are not comparable to the corrected multi-positive objective.
 
-The first run proves that the pipeline can train on a T4 and package checkpoints; it does not establish useful broad intelligence. No percentage speedup is claimed because no unoptimised controlled baseline was run.
+Per-specialist report:
+- PerceptionNet: 93,877 parameters; 35 epochs; 1.152 s; 10,755 training examples/s; test subject accuracy 100%, relation accuracy 72.0%.
+- AssociationNet: 14,659 parameters; 37 epochs; 0.189 s; 11,543 training subject/relation groups/s; known-graph reconstruction top-1 and top-5 both 100% (in-sample).
+- MemoryNet: 85,632 parameters; 32 epochs; 0.438 s; 25,848 training queries/s; multi-positive test Recall@1 71.2%, Recall@5 89.8%.
+- Total: 194,168 parameters.
 
-### Corrections made after first run
+The first GPU baseline (run 41763096394) reported 7.84 s but used earlier objectives and did not synchronise CUDA at timing boundaries. The revised run reports 6.776 s, but this is not a controlled speedup comparison because model objectives/architecture and timing method changed. Do not claim a measured percentage gain.
 
-- AssociationNet now has distinct subject/object embedding tables and is trained to reconstruct the known graph from multi-positive object targets. The metric is named graph reconstruction to avoid falsely reporting held-out generalisation.
-- MemoryNet question rows now group all fact IDs valid for the subject/relation; loss and metrics accept any/all valid records as positives.
-- The chat controller now returns all matching valid facts (for example, both water and sunlight for tree/needs).
-- CUDA timing is synchronised before elapsed-time and throughput calculations.
-- CI tests explicitly cover multi-positive graph and memory labels.
+### Inference spot-check and recent controller changes
 
-### CI / follow-up state
+The released archive was downloaded and all three state dictionaries were loaded into their matching architectures in a local sanity harness. It returned sensible seed-graph answers for “What is rain?”, “What is a car?”, “What does a tree need?” (both sunlight and water), “What does RAM store?”, “Where does a river flow?”, “What is photosynthesis?”, “What does Python do?”, and “What does fire need?”. It abstained for an unknown concept (“dragon”). This was a narrow spot-check, not a broad benchmark.
 
-- Earlier full CI passed at [41763677404](https://github.com/lm11-gif/ok/actions/runs/41763677404) for compilation, unit tests, bundled Kaggle script, CPU smoke training, checkpoint loading/inference, and archive validation at that source revision.
-- The latest throughput-timing/doc update triggered [41763985893](https://github.com/lm11-gif/ok/actions/runs/41763985893). Inspect its final result before launching the follow-up GPU run. Another stale run at 41763904035 may be cancelled by the CI concurrency rule.
-- After latest CI passes, check all in-progress GitHub Actions and obey the shared Kaggle concurrency group `orbit-kaggle-gpu-shared`.
-- Update `START_TRAINING.txt` to trigger a new version of canonical kernel `$KAGGLE_USERNAME/orbit-cognitive-v1-gpu-training`. Do not create a concurrent second Kaggle GPU kernel.
-- The workflow bundles the modules, uses the canonical slug directly (no fragile kernel-list JSON parse), validates the CUDA report/checkpoint files, uploads the durable Actions artifact first, and then clobbers assets on the existing `orbit-cognitive-v1` release tag.
-- Inspect the new report for graph reconstruction top-1, MemoryNet multi-positive Recall@1/5, PerceptionNet subject/relation metrics, GPU model, CUDA/PyTorch versions, per-specialist runtime/throughput, and peak allocated GPU memory. Compare speed with first run only with the caveat that training objectives changed.
-- The corrected weights have **not** been trained yet; the release currently holds the first-run checkpoint format, which chat.py can still load through its migration code.
+After that spot-check, chat.py was updated to:
+- recognise basic plurals such as cats, trees, countries, buses;
+- use explicit query wording (“made of”, “need”, “where”, “flow”, etc.) as relation-routing hints, retaining PerceptionNet as fallback;
+- compose more natural definitions (e.g. “rain is precipitation”, “computer is an electronic device”, “desk is furniture”).
 
-Keep ORBIT Seed v0.3 as a separate scratch-language-model experiment. Its Kaggle execution completed earlier, but its report commit was rejected and no v0.3 release was confirmed. Do not confuse this with Cognitive v1.
+Regression tests for these helpers were added. The latest relevant CI run is [41764647490](https://github.com/lm11-gif/ok/actions/runs/41764647490); inspect its live conclusion. Documentation changes triggered another check [41764871483](https://github.com/lm11-gif/ok/actions/runs/41764871483), currently pending at the time of this update. Do not claim the newest chat-controller edits passed until the latest CI run is green.
+
+These chat.py-only changes do not require retraining; the checkpoint architecture is unchanged. The current release contains the corrected training objectives and latest trained weights. If a future model class or checkpoint tensor shape changes, retrain and publish a matching archive.
+
+### Next meaningful work
+
+1. Confirm the latest CI run passes the new plural, relation-cue, and grammar regression tests.
+2. Expand the fact graph substantially, with independent provenance and review. The current 67 facts are only a bootstrap.
+3. Build manually authored held-out questions unrelated to training templates. Cover definitions, paraphrases, relation confusion, multi-step rule application, unknowns, contradictions, and ambiguous inputs.
+4. Add an explicit rule/constraint engine and provenance/conflict tracking so the system can combine facts, explain chains, and abstain on missing or inconsistent evidence.
+5. Measure exact factual accuracy, evidence coverage, unsupported-answer rate, unknown abstention, latency, and memory use.
+6. Only add a ControlNet or further specialist networks when a simple rule-based baseline shows a concrete need.
+
+Keep ORBIT Seed v0.3 as a separate scratch-language-model experiment. Its Kaggle execution completed earlier, but its report commit was rejected and no v0.3 release was confirmed. Do not mix its weights or status into Cognitive v1.
