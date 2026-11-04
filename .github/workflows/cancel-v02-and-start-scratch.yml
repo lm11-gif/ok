@@ -28,7 +28,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "=== v0.2 pretrained branch ==="
+          echo "=== v0.2 pretrained branch — post-user-cancellation verification ==="
           kaggle kernels status "dud12345/orbit-seed-v0-2-fine-tuning" || true
           echo "=== v0.3 scratch branch ==="
           kaggle kernels status "dud12345/orbit-seed-v0-3-scratch-training" || true
