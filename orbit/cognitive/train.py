@@ -77,7 +77,11 @@ def autocast_context(device: torch.device, amp_enabled: bool):
 
 
 def new_scaler(device: torch.device, amp_enabled: bool):
-    return torch.cuda.amp.GradScaler(enabled=(device.type == "cuda" and amp_enabled))
+    enabled = device.type == "cuda" and amp_enabled
+    try:
+        return torch.amp.GradScaler("cuda", enabled=enabled)
+    except (AttributeError, TypeError):
+        return torch.cuda.amp.GradScaler(enabled=enabled)
 
 
 def accuracy(logits: torch.Tensor, targets: torch.Tensor) -> float:
@@ -364,7 +368,7 @@ def main():
     }
     (output / "training_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
 
-    archive = output.parent / "orbit-cognitive-v1.zip"
+    archive = output.parent / f"{output.name}.zip"
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
         for path in sorted(output.rglob("*")):
             if path.is_file():
