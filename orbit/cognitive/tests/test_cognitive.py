@@ -46,12 +46,21 @@ class CognitiveDataTests(unittest.TestCase):
         subject_id = data["entity_to_id"]["tree"]
         relation_id = data["relation_to_id"]["needs"]
         groups = [
-            group for split in data["association_splits"].values()
-            for group in split
+            group for group in data["association_splits"]["train"]
             if group["subject_id"] == subject_id and group["relation_id"] == relation_id
         ]
         self.assertEqual(len(groups), 1)
         self.assertEqual(len(groups[0]["object_ids"]), 2)
+        expected_pairs = {
+            (row["subject_id"], row["relation_id"])
+            for row in data["association_splits"]["train"]
+        }
+        for split in ("validation", "test"):
+            actual_pairs = {
+                (row["subject_id"], row["relation_id"])
+                for row in data["association_splits"][split]
+            }
+            self.assertEqual(actual_pairs, expected_pairs)
 
     def test_neural_module_shapes(self):
         data = build_seed_data()
