@@ -38,7 +38,7 @@ except ImportError:  # Kaggle script mode: modules are side-by-side.
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", choices=("cuda", "cpu", "auto"), default="cuda")
-    parser.add_argument("--output", default="artifacts/orbit-cognitive-v2.2")
+    parser.add_argument("--output", default="artifacts/orbit-cognitive-v2.3")
     parser.add_argument("--epochs-perception", type=int, default=35)
     parser.add_argument("--epochs-association", type=int, default=250)
     parser.add_argument("--epochs-memory", type=int, default=50)
@@ -47,6 +47,7 @@ def parse_args():
     parser.add_argument("--learning-rate", type=float, default=0.002)
     parser.add_argument("--seed", type=int, default=20261104)
     parser.add_argument("--generator-epochs", type=int, default=30)
+    parser.add_argument("--ultrachat-max-conversations", type=int, default=25000)
     parser.add_argument("--generator-batch-size", type=int, default=16)
     parser.add_argument("--generator-vocab-size", type=int, default=8192)
     parser.add_argument("--generator-dim", type=int, default=256)
@@ -731,8 +732,156 @@ def _natural_fact_answer(group: list[dict[str, Any]]) -> str:
     return forms.get(relation, f"{subject} is related to {obj}.")
 
 
+
+
+def _normalise_ultrachat_messages(raw_messages: Any) -> list[dict[str, str]]:
+    if not isinstance(raw_messages, (list, tuple)):
+        return []
+    messages: list[dict[str, str]] = []
+    for item in raw_messages:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", "")).lower()
+        if role not in {"user", "assistant"}:
+            continue
+        text = _clean_external_text(item.get("content", ""))
+        if len(text) < 2 or len(text) > 6000:
+            continue
+        if messages and messages[-1]["role"] == role:
+            # Preserve conversational alternation; if duplicate roles occur, merge
+            # their adjacent text instead of silently discarding the content.
+            messages[-1]["text"] = (messages[-1]["text"] + "\n\n" + text)[:8000]
+        else:
+            messages.append({"role": role, "text": text})
+    while messages and messages[0]["role"] != "user":
+        messages.pop(0)
+    if len(messages) < 2 or messages[-1]["role"] != "assistant":
+        return []
+    # Keep at most six user/assistant exchanges so the sample fits the context budget.
+    messages = messages[-12:]
+    while messages and messages[0]["role"] != "user":
+        messages.pop(0)
+    if len(messages) < 2 or messages[-1]["role"] != "assistant":
+        return []
+    return messages
+
+
+def _load_ultrachat_dialogues(
+    seed: int, max_train_conversations: int = 25000
+) -> tuple[list[str], list[str], list[dict[str, Any]], dict[str, Any]]:
+    """Load a deterministic subset of MIT-licensed UltraChat SFT conversations."""
+    revision = "b9df0fe0b62ba1c0467237161aae4cb6626c3745"
+    base = (
+        "https://huggingface.co/datasets/HuggingFaceH4/ultrachat_200k/resolve/"
+        + revision + "/default/"
+    )
+    train_rows, train_hash, train_bytes = _download_parquet_rows(
+        base + "train_sft/0000.parquet", "UltraChat 200k/train_sft/0000"
+    )
+    test_rows, test_hash, test_bytes = _download_parquet_rows(
+        base + "test_sft/0000.parquet", "UltraChat 200k/test_sft/0000"
+    )
+    rng = random.Random(seed + 2301)
+    if max_train_conversations > 0 and len(train_rows) > max_train_conversations:
+        train_rows = rng.sample(train_rows, max_train_conversations)
+
+    train_documents: list[str] = []
+    validation_documents: list[str] = []
+    eval_examples: list[dict[str, Any]] = []
+    validation_rows = 0
+    kept_train_conversations = 0
+    target_examples = 0
+
+    # Split by conversation/prompt ID, never by individual assistant turn.
+    indexed_train = []
+    for row in train_rows:
+        messages = _normalise_ultrachat_messages(row.get("messages"))
+        if len(messages) < 2:
+            continue
+        prompt_id = str(row.get("prompt_id") or row.get("prompt") or "")
+        if not prompt_id:
+            prompt_id = hashlib.sha256(
+                "\n".join(item["text"] for item in messages).encode("utf-8")
+            ).hexdigest()
+        indexed_train.append((prompt_id, messages))
+    rng.shuffle(indexed_train)
+    validation_ids = {
+        prompt_id for prompt_id, _ in indexed_train[:max(1, int(len(indexed_train) * 0.05))]
+    }
+    for prompt_id, messages in indexed_train:
+        destination = validation_documents if prompt_id in validation_ids else train_documents
+        if prompt_id not in validation_ids:
+            kept_train_conversations += 1
+        else:
+            validation_rows += 1
+        assistant_indices = [
+            index for index, item in enumerate(messages) if item["role"] == "assistant"
+        ]
+        for target_index in assistant_indices:
+            prefix = messages[:target_index]
+            if not prefix or prefix[-1]["role"] != "user":
+                continue
+            chain = messages[max(0, target_index - 11):target_index + 1]
+            while chain and chain[0]["role"] != "user":
+                chain = chain[1:]
+            if len(chain) < 2 or chain[-2]["role"] != "user":
+                continue
+            destination.append(_format_chat_messages(chain))
+            target_examples += 1
+
+    rng.shuffle(train_documents)
+    rng.shuffle(validation_documents)
+    test_messages = []
+    for row in test_rows:
+        messages = _normalise_ultrachat_messages(row.get("messages"))
+        if len(messages) < 2:
+            continue
+        test_messages.append(messages)
+    rng.shuffle(test_messages)
+    for messages in test_messages[:1200]:
+        assistant_indices = [
+            index for index, item in enumerate(messages) if item["role"] == "assistant"
+        ]
+        if not assistant_indices:
+            continue
+        target_index = assistant_indices[-1]
+        prefix = messages[:target_index]
+        if not prefix or prefix[-1]["role"] != "user":
+            continue
+        eval_examples.append({
+            "dataset": "UltraChat 200k test_sft",
+            "prompt": prefix[-1]["text"],
+            "reference": messages[target_index]["text"],
+            "history": prefix[:-1],
+            "formatted_prompt": _format_chat_messages(prefix, include_end=False)
+            + "\n<|assistant|>",
+        })
+
+    metadata = {
+        "name": "HuggingFaceH4/ultrachat_200k",
+        "url": "https://huggingface.co/datasets/HuggingFaceH4/ultrachat_200k",
+        "revision": revision,
+        "license": "MIT",
+        "description": "Filtered English supervised multi-turn conversation dataset; text data only, no model weights.",
+        "raw_rows": {"train_shard_0000": len(train_rows), "test_sft": len(test_rows)},
+        "usable_conversations": {
+            "train": kept_train_conversations, "validation": validation_rows,
+            "test": len(test_messages),
+        },
+        "assistant_training_documents": {
+            "train": len(train_documents), "validation": len(validation_documents)
+        },
+        "assistant_turn_examples_before_split": target_examples,
+        "sha256": {"train_shard_0000": train_hash, "test_sft": test_hash},
+        "download_bytes": {"train_shard_0000": train_bytes, "test_sft": test_bytes},
+        "split_method": "pinned train_sft shard split by prompt_id; separate test_sft held out",
+    }
+    return train_documents, validation_documents, eval_examples, metadata
+
+
 def build_language_documents(
-    data: dict[str, Any], seed: int, include_public: bool = True
+    data: dict[str, Any], seed: int, include_public: bool = True,
+    ultrachat_max_conversations: int = 25000,
 ) -> tuple[list[str], list[str], list[dict[str, Any]], list[dict[str, Any]]]:
     """Build assistant-supervised chat documents with held-out conversation trees."""
     authored: list[str] = []
@@ -791,7 +940,13 @@ def build_language_documents(
         validation_documents.extend(daily_validation)
         eval_examples.extend(oasst_eval)
         eval_examples.extend(daily_eval)
-        provenance.extend([oasst_info, daily_info])
+        ultra_train, ultra_validation, ultra_eval, ultra_info = _load_ultrachat_dialogues(
+            seed, max_train_conversations=ultrachat_max_conversations
+        )
+        train_documents.extend(ultra_train)
+        validation_documents.extend(ultra_validation)
+        eval_examples.extend(ultra_eval)
+        provenance.extend([oasst_info, daily_info, ultra_info])
 
     rng.shuffle(train_documents)
     rng.shuffle(validation_documents)
@@ -882,7 +1037,8 @@ def _masked_language_loss(
 
 def run_language_generator(data, device, out_dir, args, amp_enabled):
     train_documents, validation_documents, dialogue_eval, dataset_sources = build_language_documents(
-        data, args.seed, include_public=not args.smoke
+        data, args.seed, include_public=not args.smoke,
+        ultrachat_max_conversations=args.ultrachat_max_conversations,
     )
     if len(train_documents) < 20 or not validation_documents:
         raise RuntimeError("Language train/validation documents are insufficient.")
@@ -1109,7 +1265,7 @@ def write_runtime_package(output: Path) -> list[str]:
         written.append(name)
 
     (output / "README.txt").write_text(
-        "ORBIT Cognitive v2.2 Conversational - complete inference package\n"
+        "ORBIT Cognitive v2.3 Conversational - complete inference package\n"
         "=================================================\n\n"
         "This archive contains trained checkpoints, the neural language generator, "
         "configuration, fact memory, and the Python files needed to run the model.\n\n"
@@ -1205,7 +1361,7 @@ def main():
         json.dumps(serial_facts, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
     config = {
-        "project": "ORBIT Cognitive v2.2 Conversational",
+        "project": "ORBIT Cognitive v2.3 Conversational",
         "dataset_fingerprint_sha256": data_fingerprint,
         "from_scratch": True,
         "pretrained_student_weights": False,
@@ -1230,10 +1386,10 @@ def main():
         "optimizer": "AdamW (fused when supported)",
         "training_examples": {k: len(v) for k, v in data["examples"].items()},
         "dataset": "Original authored dialogue plus English-only reviewed OpenAssistant OASST1 and English Daily Dialogues 10K; conversation-level validation split",
-        "dataset_scope_warning": "Student weights are randomly initialised. Public dialogue datasets improve conversational coverage but do not guarantee general reasoning or factual accuracy.",
+        "dataset_scope_warning": "Student weights are randomly initialised. OASST1, Daily Dialogues 10K and UltraChat 200k improve conversation coverage but do not guarantee general reasoning or factual accuracy.",
     }
     (output / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
-    print("ORBIT Cognitive v2.2 Conversational training configuration:")
+    print("ORBIT Cognitive v2.3 Conversational training configuration:")
     print(json.dumps(config, indent=2), flush=True)
 
     start = time.perf_counter()
@@ -1248,7 +1404,7 @@ def main():
     config["language_dataset_sources"] = generator_config.get("dataset_sources", [])
     total_seconds = time.perf_counter() - start
     report = {
-        "project": "ORBIT Cognitive v2.2 Conversational",
+        "project": "ORBIT Cognitive v2.3 Conversational",
         "status": "smoke_test_only" if args.smoke else "trained",
         "all_students_randomly_initialised": True,
         "teacher_weights_loaded": False,
