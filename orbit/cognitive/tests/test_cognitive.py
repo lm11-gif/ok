@@ -3,7 +3,7 @@ import torch
 from orbit.cognitive.core import build_seed_data, encode_examples, encode_text
 from orbit.cognitive.models import PerceptionNet, AssociationNet, MemoryNet
 from orbit.cognitive.language import VocabularyTokenizer, NeuralLanguageGenerator
-from orbit.cognitive.train import assistant_target_mask, _format_daily_dialogue, _normalise_ultrachat_messages, _load_ultrachat_dialogues, _language_batch, _masked_language_loss
+from orbit.cognitive.train import assistant_target_mask, _format_daily_dialogue, _normalise_ultrachat_messages, _load_ultrachat_dialogues, _generate_conversation_rollouts, _language_batch, _masked_language_loss
 from unittest.mock import patch
 from orbit.cognitive.chat import entity_aliases, find_mentioned_entities, relation_hint, compose_is_a, canonical_relation_query
 
@@ -92,6 +92,36 @@ class CognitiveDataTests(unittest.TestCase):
         self.assertEqual(compose_is_a("computer", "electronic device"), "computer is an electronic device.")
         self.assertEqual(compose_is_a("desk", "furniture"), "desk is furniture.")
 
+
+    def test_conversation_rollout_uses_generated_reply_in_follow_up_history(self):
+        class FakeGenerator:
+            def __init__(self):
+                self.prompts = []
+            def generate(self, prompt, tokenizer, **kwargs):
+                self.prompts.append(prompt)
+                return f"generated response {len(self.prompts)}"
+
+        dialogue = {
+            "dataset": "test dialogue",
+            "rollout_messages": [
+                {"role": "user", "text": "I am building a small game."},
+                {"role": "assistant", "text": "REFERENCE FIRST ANSWER"},
+                {"role": "user", "text": "What should I implement first?"},
+                {"role": "assistant", "text": "REFERENCE SECOND ANSWER"},
+                {"role": "user", "text": "How do I test that?"},
+                {"role": "assistant", "text": "REFERENCE THIRD ANSWER"},
+            ],
+        }
+        model = FakeGenerator()
+        samples = _generate_conversation_rollouts(
+            model, tokenizer=None, dialogues=[dialogue], max_dialogues=1, max_turns=3
+        )
+        self.assertEqual(len(samples), 3)
+        self.assertIn("generated response 1", model.prompts[1])
+        self.assertNotIn("REFERENCE FIRST ANSWER", model.prompts[1])
+        self.assertIn("generated response 2", model.prompts[2])
+        self.assertNotIn("REFERENCE SECOND ANSWER", model.prompts[2])
+        self.assertEqual(samples[1]["evaluation_mode"], "generated-history rollout")
 
     def test_ultrachat_message_normalisation_preserves_conversation_order(self):
         raw = [
