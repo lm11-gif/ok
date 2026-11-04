@@ -98,31 +98,51 @@ class OrbitCognitive:
         candidate_ids = [i for i, sid in enumerate(self.fact_subject_ids) if sid == subject_id]
         if not candidate_ids:
             return f"I recognise {self.entities[subject_id].replace('_', ' ')}, but I have no stored facts about it."
-        scores = self.memory(x, self.fact_tokens)[0]
-        relation_candidates = [i for i in candidate_ids if self.fact_relation_ids[i] == relation_id]
-        if relation_conf >= 0.18 and not relation_candidates:
+        if relation_conf < 0.15:
+            return (
+                f"I recognise {self.entities[subject_id].replace('_', ' ')}, "
+                "but I am not confident enough about the relationship being asked."
+            )
+        candidate_ids = [
+            i for i in candidate_ids if self.fact_relation_ids[i] == relation_id
+        ]
+        if not candidate_ids:
             relation_name = self.relations[relation_id].replace("_", " ")
             return (f"I recognise {self.entities[subject_id].replace('_', ' ')}, "
                     f"but my current memory has no reliable fact about {relation_name}.")
-        if relation_candidates:
-            candidate_ids = relation_candidates
+
+        scores = self.memory(x, self.fact_tokens)[0]
         association_logits = self.association(
             torch.tensor([subject_id], device=self.device),
             torch.tensor([relation_id], device=self.device),
         )[0]
         association_log_probs = association_logits.log_softmax(dim=-1)
+
+        # Rank all valid records for this subject/relation. Multiple facts are
+        # returned together rather than treating one valid object as incorrect.
         def combined_score(fact_id: int) -> float:
             object_id = int(self.facts[fact_id]["object_id"])
             return float(scores[fact_id].item()) + 0.15 * float(association_log_probs[object_id].item())
-        best_id = max(candidate_ids, key=combined_score)
-        cosine_score = float(scores[best_id].item()) * float(self.memory.temperature)
-        if cosine_score < 0.12 or subject_conf < 0.05:
-            return (f"I recognise {self.entities[subject_id].replace('_', ' ')}, "
-                    "but I couldn't retrieve a sufficiently relevant fact to answer confidently.")
-        fact = self.facts[best_id]
-        subject, obj = fact["subject"].replace("_", " "), fact["object"].replace("_", " ")
-        answer = ANSWER_FORMS.get(fact["relation"], "{s} is related to {o}.").format(s=subject, o=obj)
-        return answer + f" [retrieved fact similarity: {cosine_score:.2f}]"
+
+        ranked_ids = sorted(candidate_ids, key=combined_score, reverse=True)
+        best_similarity = float(scores[ranked_ids[0]].item()) * float(self.memory.temperature)
+        if best_similarity < 0.12 or subject_conf < 0.05:
+            return (
+                f"I recognise {self.entities[subject_id].replace('_', ' ')}, "
+                "but I couldn't retrieve a sufficiently relevant fact to answer confidently."
+            )
+
+        fact = self.facts[ranked_ids[0]]
+        subject = fact["subject"].replace("_", " ")
+        objects = [self.facts[fid]["object"].replace("_", " ") for fid in ranked_ids]
+        if len(objects) == 1:
+            object_text = objects[0]
+        else:
+            object_text = ", ".join(objects[:-1]) + " and " + objects[-1]
+        template = ANSWER_FORMS.get(fact["relation"], "{s} is related to {o}.")
+        answer = template.format(s=subject, o=object_text)
+        return answer + f" [retrieved fact similarity: {best_similarity:.2f}]"
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
