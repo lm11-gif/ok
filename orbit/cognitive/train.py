@@ -235,10 +235,19 @@ def run_association(data, device, out_dir, args, amp_enabled):
 def run_memory(data, device, out_dir, args, amp_enabled):
     facts_np = encode_facts(data["facts"], data["vocab"])
     facts_x = to_device(facts_np, device)
+    num_facts = len(data["facts"])
     encoded = {}
     for split in ("train", "validation", "test"):
-        x, _, _, fact_ids = encode_examples(data["examples"][split], data["vocab"])
-        encoded[split] = (to_device(x, device), to_device(fact_ids, device))
+        rows = data["examples"][split]
+        x = np.stack([__import__("core").encode_text(row["text"], data["vocab"]) for row in rows]) \
+            if rows and "core" in __import__("sys").modules else None
+        if x is None:
+            from core import encode_text as _encode_text
+            x = np.stack([_encode_text(row["text"], data["vocab"]) for row in rows])
+        targets = torch.zeros((len(rows), num_facts), dtype=torch.float32, device=device)
+        for row_index, row in enumerate(rows):
+            targets[row_index, row["fact_ids"]] = 1.0
+        encoded[split] = (to_device(x, device), targets)
 
     model = MemoryNet(len(data["vocab"]), args.dim).to(device)
     optimizer, fused = make_optimizer(model.parameters(), args.learning_rate, device)
@@ -246,50 +255,68 @@ def run_memory(data, device, out_dir, args, amp_enabled):
     best_score, best_state, best_epoch = -1.0, None, 0
     epochs = 1 if args.smoke else args.epochs_memory
     start = time.perf_counter()
+
+    def retrieval_metrics(logits, target_matrix):
+        top1 = logits.argmax(dim=-1, keepdim=True)
+        recall1 = target_matrix.gather(1, top1).squeeze(1).gt(0).float().mean().item()
+        k = min(5, logits.shape[-1])
+        topk = logits.topk(k, dim=-1).indices
+        recallk = target_matrix.gather(1, topk).gt(0).any(dim=1).float().mean().item()
+        return {"recall_at_1": float(recall1), "recall_at_5": float(recallk)}
+
     for epoch in range(epochs):
         model.train()
-        train_x, train_y = encoded["train"]
+        train_x, train_targets = encoded["train"]
         order = torch.randperm(train_x.shape[0], device=device)
         for ids in order.split(args.batch_size):
             optimizer.zero_grad(set_to_none=True)
             with autocast_context(device, amp_enabled):
                 logits = model(train_x.index_select(0, ids), facts_x)
-                loss = F.cross_entropy(logits, train_y.index_select(0, ids))
+                batch_targets = train_targets[ids]
+                log_probs = F.log_softmax(logits.float(), dim=-1)
+                loss = -(
+                    (log_probs * batch_targets).sum(dim=-1)
+                    / batch_targets.sum(dim=-1).clamp_min(1.0)
+                ).mean()
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
         model.eval()
-        val_x, val_y = encoded["validation"]
+        val_x, val_targets = encoded["validation"]
         with torch.no_grad(), autocast_context(device, amp_enabled):
             val_logits = model(val_x, facts_x)
-            score = accuracy(val_logits, val_y)
+            metrics = retrieval_metrics(val_logits, val_targets)
+            score = metrics["recall_at_1"]
         if score > best_score:
             best_score, best_epoch = score, epoch + 1
             best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
         if not args.smoke and epoch - best_epoch >= 10:
             break
+
     if best_state is not None:
         model.load_state_dict(best_state)
     model.eval()
-    test_x, test_y = encoded["test"]
+    test_x, test_targets = encoded["test"]
     with torch.no_grad(), autocast_context(device, amp_enabled):
         test_logits = model(test_x, facts_x)
-        top1 = accuracy(test_logits, test_y)
-        topk = min(5, test_logits.shape[-1])
-        top5 = float(
-            (test_logits.topk(topk, dim=-1).indices == test_y.unsqueeze(1)).any(dim=1).float().mean().item()
-        )
+        test_metrics = retrieval_metrics(test_logits, test_targets)
     elapsed = time.perf_counter() - start
     save_checkpoint(out_dir / "memory.pt", model, {
-        "name": "MemoryNet", "random_initialisation": True,
-        "validation_recall_at_1": best_score, "best_epoch": best_epoch,
-        "test_metrics": {"recall_at_1": top1, "recall_at_5": top5},
+        "name": "MemoryNet",
+        "random_initialisation": True,
+        "validation_recall_at_1": best_score,
+        "best_epoch": best_epoch,
+        "test_metrics": test_metrics,
+        "multi_positive_fact_objective": "mean negative log probability across all valid fact records for each question",
     })
     return {
-        "validation_recall_at_1": best_score, "best_epoch": best_epoch,
-        "test": {"recall_at_1": top1, "recall_at_5": top5},
-        "seconds": elapsed, "fused_adamw": fused,
-        "train_queries": int(train_x.shape[0]), "memory_records": int(facts_x.shape[0]),
+        "validation_retrieval": {"recall_at_1": best_score},
+        "best_epoch": best_epoch,
+        "test": test_metrics,
+        "seconds": elapsed,
+        "fused_adamw": fused,
+        "train_queries": int(train_x.shape[0]),
+        "memory_records": int(facts_x.shape[0]),
         "parameters": sum(parameter.numel() for parameter in model.parameters()),
     }
 
