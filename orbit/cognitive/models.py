@@ -46,19 +46,21 @@ class PerceptionNet(nn.Module):
 
 
 class AssociationNet(nn.Module):
-    """DistMult-style graph link predictor over concept and relation IDs."""
+    """Asymmetric bilinear graph scorer with separate subject/object tables."""
     def __init__(self, num_entities: int, num_relations: int, dim: int = 96):
         super().__init__()
-        self.entity = nn.Embedding(num_entities, dim)
+        self.subject = nn.Embedding(num_entities, dim)
+        self.object = nn.Embedding(num_entities, dim)
         self.relation = nn.Embedding(num_relations, dim)
         self.object_bias = nn.Embedding(num_entities, 1)
-        nn.init.xavier_uniform_(self.entity.weight)
+        nn.init.xavier_uniform_(self.subject.weight)
+        nn.init.xavier_uniform_(self.object.weight)
         nn.init.xavier_uniform_(self.relation.weight)
         nn.init.zeros_(self.object_bias.weight)
 
     def forward(self, subject_ids: torch.Tensor, relation_ids: torch.Tensor):
-        query = self.entity(subject_ids) * self.relation(relation_ids)
-        return query @ self.entity.weight.T + self.object_bias.weight.squeeze(-1)
+        query = self.subject(subject_ids) * self.relation(relation_ids)
+        return query @ self.object.weight.T + self.object_bias.weight.squeeze(-1)
 
 
 class MemoryNet(nn.Module):
