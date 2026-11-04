@@ -30,6 +30,21 @@ jobs:
         run: python -m unittest discover -s orbit/cognitive/tests -v
       - name: Run CPU smoke training
         run: python -m orbit.cognitive.train --device cpu --smoke --output "$RUNNER_TEMP/orbit-cognitive-smoke"
+      - name: Smoke-test trained checkpoint loading and inference
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from orbit.cognitive.chat import OrbitCognitive
+          model = Path(os.environ["RUNNER_TEMP"]) / "orbit-cognitive-smoke"
+          bot = OrbitCognitive(model, device="cpu")
+          answer = bot.answer("What is rain?")
+          unknown = bot.answer("What is flibbertigibbet?")
+          assert isinstance(answer, str) and answer.strip()
+          assert "won't guess" in unknown
+          print("Known-concept response:", answer)
+          print("Unknown-concept response:", unknown)
+          PY
       - name: Verify smoke-training archive
         run: |
           test -s "$RUNNER_TEMP/orbit-cognitive-smoke.zip"
