@@ -72,6 +72,64 @@ def find_mentioned_entities(question: str, entities: list[str]) -> list[int]:
                for alias in entity_aliases(entity))
     ]
 
+def build_conversation_prompt(
+    question: str,
+    context: str,
+    history: list[tuple[str, str, str]],
+    tokenizer: VocabularyTokenizer,
+    block_size: int,
+    system_prompt: str = LANGUAGE_SYSTEM_PROMPT,
+) -> str:
+    """Fit complete recent turns into context without truncating the current user message."""
+    system = f"<|system|>{system_prompt}\n"
+    selected_context = context
+    current_question = question
+
+    def latest_block(q: str, ctx: str) -> str:
+        return (
+            f"<|user|> {q}\n<|context|> {ctx}\n<|assistant|>"
+        )
+
+    current = latest_block(current_question, selected_context)
+    base = system + current
+    if len(tokenizer.encode(base)) > block_size:
+        # Drop retrieved fact clauses before shortening the user's own message.
+        clauses = [part.strip() for part in selected_context.split(";") if part.strip()]
+        while clauses and len(tokenizer.encode(system + latest_block(
+            current_question, "; ".join(clauses)
+        ))) > block_size:
+            clauses.pop()
+        selected_context = "; ".join(clauses) or "No verified memory facts were retrieved."
+        current = latest_block(current_question, selected_context)
+        base = system + current
+
+    if len(tokenizer.encode(base)) > block_size:
+        fixed = system + "<|user|> \n<|context|> No verified memory facts were retrieved.\n<|assistant|>"
+        allowance = max(1, block_size - len(tokenizer.encode(fixed)))
+        question_ids = tokenizer.encode(current_question)
+        current_question = tokenizer.decode(question_ids[-allowance:])
+        current = latest_block(current_question, "No verified memory facts were retrieved.")
+        base = system + current
+
+    if len(tokenizer.encode(base)) > block_size:
+        raise ValueError(
+            "The current message and system prompt exceed ORBIT's context window."
+        )
+
+    selected_history: list[str] = []
+    for old_question, old_answer, old_context in reversed(history):
+        turn = (
+            f"<|user|> {old_question}\n<|context|> {old_context}\n"
+            f"<|assistant|> {old_answer}\n"
+        )
+        candidate = system + turn + "".join(selected_history) + current
+        if len(tokenizer.encode(candidate)) > block_size:
+            break
+        selected_history.insert(0, turn)
+
+    return system + "".join(selected_history) + current
+
+
 def canonical_relation_query(subject: str, relation: str) -> str:
     templates = QUESTION_TEMPLATES.get(relation)
     if not templates:
@@ -235,13 +293,9 @@ class OrbitCognitive:
             )
             if facts else "No verified memory facts were retrieved."
         )
-        history_text = "".join(
-            f"<|user|> {old_question}\n<|context|> {old_context}\n<|assistant|> {old_answer}\n"
-            for old_question, old_answer, old_context in self.history[-6:]
-        )
-        prompt = (
-            f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\n{history_text}"
-            f"<|user|> {question}\n<|context|> {context}\n<|assistant|>"
+        prompt = build_conversation_prompt(
+            question, context, self.history[-8:], self.language_tokenizer,
+            self.generator.block_size, LANGUAGE_SYSTEM_PROMPT,
         )
         response = self.generator.generate(
             prompt, self.language_tokenizer,
