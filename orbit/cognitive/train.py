@@ -12,6 +12,7 @@ import json
 import os
 from contextlib import nullcontext
 import random
+import re
 import shutil
 import time
 import zipfile
@@ -35,7 +36,7 @@ except ImportError:  # Kaggle script mode: modules are side-by-side.
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", choices=("cuda", "cpu", "auto"), default="cuda")
-    parser.add_argument("--output", default="artifacts/orbit-cognitive-v2")
+    parser.add_argument("--output", default="artifacts/orbit-cognitive-v2.1")
     parser.add_argument("--epochs-perception", type=int, default=35)
     parser.add_argument("--epochs-association", type=int, default=250)
     parser.add_argument("--epochs-memory", type=int, default=50)
@@ -503,7 +504,7 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
     if len(documents) < 20:
         raise RuntimeError("Language corpus is too small for a train/validation split.")
     tokenizer = VocabularyTokenizer.build(
-        documents, max_vocab=args.generator_vocab_size, min_frequency=2
+        documents[:split], max_vocab=args.generator_vocab_size, min_frequency=2
     )
     split = max(1, int(len(documents) * 0.95))
     split = min(split, len(documents) - 1)
@@ -621,11 +622,11 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
     tokenizer.save(out_dir / "tokenizer.json")
 
     evaluation_prompts = [
-        "Hello, how are you?",
-        "What is a computer program?",
-        "Can you explain what an algorithm is?",
-        "Tell me a short story about someone who solves a problem.",
-        "What should you do when you do not know an answer?",
+        "How do I begin creating a small game?",
+        "Why should a developer test a program after changing it?",
+        "A traveller finds a broken radio in an empty lighthouse. Write a short story.",
+        "What is a useful way to handle a task that feels too large?",
+        "How should you respond when you are unsure about an unfamiliar fact?",
     ]
     evaluation_samples = []
     torch.manual_seed(args.seed + 991)
@@ -708,7 +709,7 @@ def write_runtime_package(output: Path) -> list[str]:
         written.append(name)
 
     (output / "README.txt").write_text(
-        "ORBIT Cognitive v2 - complete inference package\n"
+        "ORBIT Cognitive v2.1 - complete inference package\n"
         "=================================================\n\n"
         "This archive contains trained checkpoints, the neural language generator, "
         "configuration, fact memory, and the Python files needed to run the model.\n\n"
@@ -813,7 +814,7 @@ def main():
         "dataset_scope_warning": "Small original synthetic corpus; training from scratch cannot be assumed to produce broad language understanding or comprehensive world knowledge.",
     }
     (output / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
-    print("ORBIT Cognitive v2 training configuration:")
+    print("ORBIT Cognitive v2.1 training configuration:")
     print(json.dumps(config, indent=2), flush=True)
 
     start = time.perf_counter()
