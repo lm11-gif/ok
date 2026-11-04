@@ -1,4 +1,4 @@
-"""Word-piece language model used by ORBIT Cognitive v2.2 Conversational.
+"""Word-piece language model used by ORBIT Cognitive v2.3 Conversational.
 
 The tokenizer learns frequent whole words and punctuation from the local training
 corpus, while retaining UTF-8 byte fallback for words it has never seen.
