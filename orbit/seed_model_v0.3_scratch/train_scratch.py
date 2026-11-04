@@ -47,6 +47,7 @@ from datasets import load_dataset
 from safetensors.torch import save_file
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+# Scratch-only training run: no pretrained student weights are ever loaded.
 SEED = 20261104
 PRETRAIN_TOKENS = 100_000_000
 MAX_RAW_CHARS = 420_000_000
