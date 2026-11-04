@@ -1,4 +1,4 @@
-"""Subword-token language model used by ORBIT Cognitive v2.1.
+"""Word-piece language model used by ORBIT Cognitive v2.1.
 
 The tokenizer learns frequent whole words and punctuation from the local training
 corpus, while retaining UTF-8 byte fallback for words it has never seen.
@@ -27,7 +27,7 @@ class VocabularyTokenizer:
     EOS_ID = 257
     UNK_ID = 258
     TOKEN_OFFSET = 259
-    FORMAT = "orbit-subword-byte-fallback-v1"
+    FORMAT = "orbit-wordpiece-byte-fallback-v1"
 
     def __init__(self, tokens: list[str]):
         if len(tokens) != len(set(tokens)):
@@ -162,7 +162,7 @@ class DecoderBlock(nn.Module):
 
 
 class NeuralLanguageGenerator(nn.Module):
-    """Randomly initialised causal Transformer over learned subword units."""
+    """Randomly initialised causal Transformer over learned word and punctuation units."""
 
     def __init__(self, config: dict):
         super().__init__()
