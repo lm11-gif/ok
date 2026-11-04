@@ -29,11 +29,15 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install --upgrade pip numpy torch
       - name: Compile Cognitive scripts
-        run: python -m py_compile orbit/cognitive/core.py orbit/cognitive/models.py orbit/cognitive/train.py orbit/cognitive/chat.py orbit/cognitive/tests/test_cognitive.py
+        run: python -m py_compile orbit/cognitive/core.py orbit/cognitive/models.py orbit/cognitive/train.py orbit/cognitive/chat.py orbit/cognitive/bundle_kaggle.py orbit/cognitive/tests/test_cognitive.py
       - name: Run unit tests
         run: python -m unittest discover -s orbit/cognitive/tests -v
-      - name: Run CPU smoke training
-        run: python -m orbit.cognitive.train --device cpu --smoke --output "$RUNNER_TEMP/orbit-cognitive-smoke"
+      - name: Build self-contained Kaggle script
+        run: |
+          python orbit/cognitive/bundle_kaggle.py --output "$RUNNER_TEMP/orbit-cognitive-bundle/train.py"
+          python -m py_compile "$RUNNER_TEMP/orbit-cognitive-bundle/train.py"
+      - name: Run CPU smoke training from the Kaggle bundle
+        run: python "$RUNNER_TEMP/orbit-cognitive-bundle/train.py" --device cpu --smoke --output "$RUNNER_TEMP/orbit-cognitive-smoke"
       - name: Smoke-test trained checkpoint loading and inference
         run: |
           python - <<'PY'
