@@ -2,6 +2,7 @@ import unittest
 import torch
 from orbit.cognitive.core import build_seed_data, encode_examples, encode_text
 from orbit.cognitive.models import PerceptionNet, AssociationNet, MemoryNet
+from orbit.cognitive.chat import entity_aliases, find_mentioned_entities, relation_hint, compose_is_a
 
 class CognitiveDataTests(unittest.TestCase):
     def test_seed_data_is_nonempty_and_split(self):
@@ -61,6 +62,27 @@ class CognitiveDataTests(unittest.TestCase):
                 for row in data["association_splits"][split]
             }
             self.assertEqual(actual_pairs, expected_pairs)
+
+    def test_plural_concepts_are_recognised(self):
+        entities = ["cat", "tree", "country", "bus"]
+        self.assertEqual(find_mentioned_entities("How are cats classified?", entities), [0])
+        self.assertEqual(find_mentioned_entities("What do trees need?", entities), [1])
+        self.assertEqual(find_mentioned_entities("Which countries have trees?", entities), [1, 2])
+        self.assertIn("buses", entity_aliases("bus"))
+
+    def test_relation_cues_route_common_question_forms(self):
+        relations = ["is_a", "made_of", "needs", "located_in", "flows_into"]
+        self.assertEqual(relation_hint("How are cats classified?", relations), "is_a")
+        self.assertEqual(relation_hint("What is rain made of?", relations), "made_of")
+        self.assertEqual(relation_hint("What does a tree need?", relations), "needs")
+        self.assertEqual(relation_hint("Where does a cloud form?", relations), "located_in")
+        self.assertEqual(relation_hint("Where does a river flow?", relations), "flows_into")
+
+    def test_is_a_answers_use_natural_articles(self):
+        self.assertEqual(compose_is_a("rain", "precipitation"), "rain is precipitation.")
+        self.assertEqual(compose_is_a("car", "vehicle"), "car is a vehicle.")
+        self.assertEqual(compose_is_a("computer", "electronic device"), "computer is an electronic device.")
+        self.assertEqual(compose_is_a("desk", "furniture"), "desk is furniture.")
 
     def test_neural_module_shapes(self):
         data = build_seed_data()
