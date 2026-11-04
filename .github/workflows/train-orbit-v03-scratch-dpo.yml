@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   syntax-check:
-    if: \${{ github.event_name == 'push' }}
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out ORBIT
@@ -27,13 +27,13 @@ jobs:
         run: python -m py_compile orbit/seed_model_v0.3_scratch/train_scratch_dpo.py orbit/seed_model_v0.3_scratch/chat.py
 
   dpo:
-    if: \${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 350
     env:
-      KAGGLE_API_TOKEN: \${{ secrets.KAGGLE_API_TOKEN }}
-      KAGGLE_USERNAME: \${{ secrets.KAGGLE_USERNAME }}
-      GH_TOKEN: \${{ github.token }}
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+      GH_TOKEN: ${{ github.token }}
 
     steps:
       - name: Check out ORBIT
@@ -53,7 +53,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "\${KAGGLE_API_TOKEN:-}" || -z "\${KAGGLE_USERNAME:-}" ]]; then
+          if [[ -z "${KAGGLE_API_TOKEN:-}" || -z "${KAGGLE_USERNAME:-}" ]]; then
             echo "::error::Add KAGGLE_API_TOKEN and KAGGLE_USERNAME in repository Actions secrets."
             exit 1
           fi
