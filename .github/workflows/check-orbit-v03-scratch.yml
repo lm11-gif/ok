@@ -6,6 +6,7 @@ on:
     paths:
       - "orbit/seed_model_v0.3_scratch/train_scratch.py"
       - "orbit/seed_model_v0.3_scratch/chat.py"
+      - "orbit/seed_model_v0.3_scratch/train_scratch_dpo.py"
 
 permissions:
   contents: read
@@ -17,4 +18,4 @@ jobs:
       - name: Check out ORBIT
         uses: actions/checkout@v4
       - name: Compile scratch scripts
-        run: python -m py_compile orbit/seed_model_v0.3_scratch/train_scratch.py orbit/seed_model_v0.3_scratch/chat.py
+        run: python -m py_compile orbit/seed_model_v0.3_scratch/train_scratch.py orbit/seed_model_v0.3_scratch/train_scratch_dpo.py orbit/seed_model_v0.3_scratch/chat.py
