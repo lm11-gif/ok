@@ -196,15 +196,15 @@ def set_seed(seed: int) -> None:
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-def collect_fineweb() -> list[str]:
-    """Stream a bounded subset of FineWeb-Edu. No model weights are downloaded."""
-    print(f"Streaming {DATASET_ID}/{DATASET_CONFIG}...", flush=True)
+def collect_fineweb(seed: int = SEED) -> list[str]:
+    """Stream a bounded, reproducibly shuffled subset of FineWeb-Edu."""
+    print(f"Streaming {DATASET_ID}/{DATASET_CONFIG} with seed={seed}...", flush=True)
     stream = load_dataset(
         DATASET_ID,
         name=DATASET_CONFIG,
         split="train",
         streaming=True,
-    ).shuffle(buffer_size=10_000, seed=SEED)
+    ).shuffle(buffer_size=10_000, seed=seed)
     docs: list[str] = []
     total_chars = 0
     for row in stream:
@@ -225,7 +225,7 @@ def collect_fineweb() -> list[str]:
             break
     if len(docs) < 10_000:
         raise RuntimeError(f"Too few FineWeb-Edu documents collected: {len(docs)}")
-    random.Random(SEED).shuffle(docs)
+    random.Random(seed).shuffle(docs)
     print(f"Collected {len(docs):,} docs and {total_chars:,} characters.", flush=True)
     return docs
 
@@ -493,10 +493,10 @@ def collate_sft(rows, pad_id: int):
         y[i, :length] = torch.tensor(row["labels"], dtype=torch.long)
     return x.cuda(), y.cuda()
 
-def teacher_sft(model, sp):
+def teacher_sft(model, sp, sft_seed: int = SEED):
     print("Loading conversation dataset for assistant-only SFT...", flush=True)
     raw = load_dataset(CHAT_DATASET, split="train")
-    raw = raw.shuffle(seed=SEED).select(range(min(SFT_EXAMPLES, len(raw))))
+    raw = raw.shuffle(seed=sft_seed).select(range(min(SFT_EXAMPLES, len(raw))))
     examples = []
     for item in raw:
         messages = item.get("messages")
@@ -601,6 +601,51 @@ def sample_answer(model, sp, prompt: str, max_new_tokens=120):
                 x = x[:, -BLOCK_SIZE:]
     return sp.decode(generated).strip()
 
+def download_previous_checkpoint():
+    """Return the latest scratch checkpoint if this is a continuation run."""
+    import requests
+    import zipfile
+
+    url = (
+        "https://github.com/lm11-gif/ok/releases/download/"
+        "orbit-seed-v0.3-scratch/orbit-seed-v0.3-scratch.zip"
+    )
+    archive = WORK / "previous-orbit-seed-v0.3-scratch.zip"
+    response = requests.get(url, stream=True, timeout=(30, 300))
+    if response.status_code == 404:
+        print("No previous scratch release found; beginning from random initialization.", flush=True)
+        return None
+    response.raise_for_status()
+    with archive.open("wb") as target:
+        for chunk in response.iter_content(chunk_size=8 * 1024 * 1024):
+            if chunk:
+                target.write(chunk)
+
+    previous = WORK / "previous-orbit-seed-v0.3-scratch"
+    if previous.exists():
+        shutil.rmtree(previous)
+    previous.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive) as zf:
+        zf.extractall(previous)
+    required = [
+        "config.json",
+        "tokenizer.model",
+        "pretraining_model.safetensors",
+        "optimizer_state.pt",
+        "pretraining_log.json",
+        "training_report.json",
+    ]
+    missing = [name for name in required if not (previous / name).is_file()]
+    if missing:
+        raise RuntimeError(
+            "The latest scratch release is missing resume state: " + ", ".join(missing)
+        )
+    config = json.loads((previous / "config.json").read_text(encoding="utf-8"))
+    if not config.get("from_scratch") or config.get("pretrained_student_weights") is not False:
+        raise RuntimeError("Refusing to continue from a checkpoint that is not marked as scratch-trained.")
+    print("Found a previous ORBIT scratch checkpoint; resuming the same student weights and optimizer.", flush=True)
+    return previous
+
 def main():
     started = time.time()
     gpu_name = require_cuda()
@@ -608,14 +653,37 @@ def main():
     torch.set_num_threads(4)
     torch.backends.cuda.matmul.allow_tf32 = True
 
-    docs = collect_fineweb()
+    previous = download_previous_checkpoint()
+    prior_report = {}
+    prior_tokens = 0
+    prior_updates = 0
+    if previous is not None:
+        prior_report = json.loads((previous / "training_report.json").read_text(encoding="utf-8"))
+        prior_tokens = int(prior_report.get("pretraining_tokens_total", prior_report.get("pretraining_tokens_processed", 0)))
+        prior_updates = int(prior_report.get("pretraining_updates_total", prior_report.get("pretraining_updates", 0)))
+
+    # A different FineWeb shuffle seed is used for each continuation round.
+    data_seed = SEED + (prior_tokens // PRETRAIN_TOKENS)
+    docs = collect_fineweb(seed=data_seed)
     val_docs_count = max(500, int(len(docs) * 0.02))
     train_docs, val_docs = docs[:-val_docs_count], docs[-val_docs_count:]
-    sp = train_tokenizer(train_docs)
-    print(f"ORBIT tokenizer size: {sp.get_piece_size():,}", flush=True)
 
-    train_count = write_token_bin(train_docs, TRAIN_BIN, sp)
-    val_count = write_token_bin(val_docs, VAL_BIN, sp)
+    if previous is None:
+        sp = train_tokenizer(train_docs)
+        config = None
+    else:
+        shutil.copy2(previous / "tokenizer.model", OUT / "tokenizer.model")
+        prior_vocab = previous / "tokenizer.vocab"
+        if prior_vocab.exists():
+            shutil.copy2(prior_vocab, OUT / "tokenizer.vocab")
+        sp = spm.SentencePieceProcessor(model_file=str(OUT / "tokenizer.model"))
+        config = json.loads((previous / "config.json").read_text(encoding="utf-8"))
+        if int(config["vocab_size"]) != sp.get_piece_size():
+            raise RuntimeError("Saved tokenizer and model vocabulary sizes do not match.")
+
+    print(f"ORBIT tokenizer size: {sp.get_piece_size():,}", flush=True)
+    write_token_bin(train_docs, TRAIN_BIN, sp)
+    write_token_bin(val_docs, VAL_BIN, sp)
     train_ids = np.memmap(TRAIN_BIN, dtype=np.uint16, mode="r")
     val_ids = np.memmap(VAL_BIN, dtype=np.uint16, mode="r")
     if len(train_ids) < PRETRAIN_TOKENS:
@@ -626,28 +694,69 @@ def main():
         )
     else:
         token_budget = PRETRAIN_TOKENS
+    if token_budget <= 0:
+        raise RuntimeError(f"Not enough pretraining tokens for a training run: {len(train_ids):,}")
 
     model = OrbitScratchGPT(sp.get_piece_size()).cuda()
-    parameter_count = sum(p.numel() for p in model.parameters())
-    print(
-        f"Initialized ORBIT from random weights: {parameter_count:,} parameters. "
-        "No pretrained student checkpoint was loaded.",
-        flush=True,
-    )
+    if config is None:
+        parameter_count = sum(p.numel() for p in model.parameters())
+        config = {
+            "model_name": "ORBIT Seed v0.3 Scratch",
+            "version": "0.3-scratch",
+            "architecture": "decoder-only causal Transformer",
+            "from_scratch": True,
+            "pretrained_student_weights": False,
+            "vocab_size": sp.get_piece_size(),
+            "block_size": BLOCK_SIZE,
+            "dim": DIM,
+            "layers": LAYERS,
+            "heads": HEADS,
+            "dropout": DROPOUT,
+            "parameters": parameter_count,
+            "initialization": "random normal; tied token/output embeddings",
+            "seed": SEED,
+        }
+        print(
+            f"Initialized ORBIT from random weights: {parameter_count:,} parameters. "
+            "No pretrained student checkpoint was loaded.",
+            flush=True,
+        )
+    else:
+        parameter_count = int(config["parameters"])
+        from safetensors.torch import load_file
+        model.load_state_dict(
+            load_file(str(previous / "pretraining_model.safetensors"), device="cuda")
+        )
+        print(
+            f"Resumed ORBIT scratch weights: {parameter_count:,} parameters; "
+            f"prior tokens={prior_tokens:,}.",
+            flush=True,
+        )
 
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=PRETRAIN_LR, betas=(0.9, 0.95), weight_decay=0.1
     )
+    if previous is not None:
+        optimizer_state = torch.load(
+            previous / "optimizer_state.pt",
+            map_location="cpu",
+            weights_only=False,
+        )
+        optimizer.load_state_dict(optimizer_state)
+        train_log = json.loads((previous / "pretraining_log.json").read_text(encoding="utf-8"))
+    else:
+        train_log = []
+
     tokens_per_update = BATCH_SIZE * BLOCK_SIZE * GRAD_ACCUM
     steps = max(1, token_budget // tokens_per_update)
     print(
-        f"Pretraining {token_budget:,} tokens over {steps:,} updates; "
-        f"batch={BATCH_SIZE}, sequence={BLOCK_SIZE}, accumulation={GRAD_ACCUM}.",
+        f"Pretraining another {token_budget:,} tokens over {steps:,} updates; "
+        f"cumulative prior tokens={prior_tokens:,}.",
         flush=True,
     )
     scaler = torch.amp.GradScaler("cuda")
     best_val = float("inf")
-    train_log = []
+    best_step = 0
     model.train()
     optimizer.zero_grad(set_to_none=True)
     run_started = time.time()
@@ -660,7 +769,6 @@ def main():
         for group in optimizer.param_groups:
             group["lr"] = lr
 
-        losses = []
         for _ in range(GRAD_ACCUM):
             x, y = get_pretrain_batch(train_ids)
             with torch.autocast("cuda", dtype=torch.float16):
@@ -669,7 +777,6 @@ def main():
             if not torch.isfinite(loss):
                 raise RuntimeError(f"Non-finite pretraining loss at step {step}.")
             scaler.scale(loss).backward()
-            losses.append(float(loss.item()) * GRAD_ACCUM)
 
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -680,49 +787,43 @@ def main():
         if step == 1 or step % 250 == 0 or step == steps:
             metrics = estimate_loss(model, train_ids, val_ids, batches=8)
             elapsed = time.time() - run_started
+            global_step = prior_updates + step
+            global_tokens = prior_tokens + step * tokens_per_update
             row = {
-                "step": step,
-                "tokens_seen": step * tokens_per_update,
+                "step": global_step,
+                "tokens_seen": global_tokens,
+                "tokens_this_run": step * tokens_per_update,
                 "train_loss": round(metrics["train"], 4),
                 "validation_loss": round(metrics["validation"], 4),
                 "learning_rate": lr,
-                "elapsed_seconds": round(elapsed, 1),
+                "elapsed_seconds_this_run": round(elapsed, 1),
             }
             train_log.append(row)
             print(json.dumps(row), flush=True)
             if metrics["validation"] < best_val:
                 best_val = metrics["validation"]
+                best_step = step
+                from safetensors.torch import save_file
                 save_file(
                     {k: v.detach().cpu().contiguous().clone() for k, v in model.state_dict().items()},
-                    str(OUT / "model.safetensors"),
+                    str(OUT / "pretraining_model.safetensors"),
                 )
+                torch.save(optimizer.state_dict(), OUT / "optimizer_state.pt")
                 (OUT / "config.json").write_text(
-                    json.dumps({
-                        "model_name": "ORBIT Seed v0.3 Scratch",
-                        "version": "0.3-scratch",
-                        "architecture": "decoder-only causal Transformer",
-                        "from_scratch": True,
-                        "pretrained_student_weights": False,
-                        "vocab_size": sp.get_piece_size(),
-                        "block_size": BLOCK_SIZE,
-                        "dim": DIM,
-                        "layers": LAYERS,
-                        "heads": HEADS,
-                        "dropout": DROPOUT,
-                        "parameters": parameter_count,
-                        "initialization": "random normal; tied token/output embeddings",
-                        "seed": SEED,
-                    }, indent=2),
-                    encoding="utf-8",
+                    json.dumps(config, indent=2), encoding="utf-8"
                 )
                 (OUT / "pretraining_log.json").write_text(
                     json.dumps(train_log, indent=2), encoding="utf-8"
                 )
 
-    # Restore the best validation checkpoint before instruction tuning.
+    if best_step == 0:
+        raise RuntimeError("No valid pretraining checkpoint was saved.")
+    # Restore the best raw-pretraining checkpoint before instruction tuning.
     from safetensors.torch import load_file
-    model.load_state_dict(load_file(str(OUT / "model.safetensors"), device="cuda"))
-    sft_report = teacher_sft(model, sp)
+    model.load_state_dict(
+        load_file(str(OUT / "pretraining_model.safetensors"), device="cuda")
+    )
+    sft_report = teacher_sft(model, sp, sft_seed=SEED + prior_tokens)
 
     prompts = [
         "Hi! What can you help me with?",
@@ -741,11 +842,14 @@ def main():
         {k: v.detach().cpu().contiguous().clone() for k, v in model.state_dict().items()},
         str(OUT / "model.safetensors"),
     )
+    tokens_this_run = best_step * tokens_per_update
+    tokens_total = prior_tokens + tokens_this_run
+    updates_total = prior_updates + best_step
     report = {
         "name": "ORBIT Seed v0.3 Scratch",
         "from_scratch": True,
         "pretrained_student_weights": False,
-        "student_initialization": "random",
+        "student_initialization": "random" if previous is None else "continued from ORBIT's own scratch checkpoint",
         "teacher_model": TEACHER_MODEL,
         "teacher_role": "synthetic text generation only; no teacher weights copied into ORBIT",
         "pretraining_dataset": DATASET_ID,
@@ -758,16 +862,18 @@ def main():
         "parameters": parameter_count,
         "vocabulary_size": sp.get_piece_size(),
         "context_length": BLOCK_SIZE,
-        "pretraining_tokens_processed": min(token_budget, steps * tokens_per_update),
-        "pretraining_updates": steps,
-        "best_validation_loss": best_val,
+        "pretraining_tokens_this_run": tokens_this_run,
+        "pretraining_tokens_total": tokens_total,
+        "pretraining_updates_this_run": best_step,
+        "pretraining_updates_total": updates_total,
+        "best_validation_loss_this_run": best_val,
         "pretraining_log": train_log,
         "instruction_tuning": sft_report,
         "elapsed_seconds": round(time.time() - started, 1),
         "smoke_test_generations": generations,
         "limitations": [
             "This is a small experimental model, not comparable to multi-billion-parameter pretrained assistants.",
-            "A single 100M-token run is an initial training phase; further data and compute would improve it.",
+            "A 100M-token stage is only one part of training; later runs resume the same random-init student.",
             "The teacher contributes generated text only; ORBIT's weights are initialized randomly.",
         ],
     }
