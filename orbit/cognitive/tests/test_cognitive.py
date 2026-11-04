@@ -1,7 +1,8 @@
 import unittest
 import torch
 from orbit.cognitive.core import build_seed_data, encode_examples, encode_text
-from orbit.cognitive.models import PerceptionNet, AssociationNet, MemoryNet, NeuralLanguageGenerator
+from orbit.cognitive.models import PerceptionNet, AssociationNet, MemoryNet
+from orbit.cognitive.language import VocabularyTokenizer, NeuralLanguageGenerator
 from orbit.cognitive.chat import entity_aliases, find_mentioned_entities, relation_hint, compose_is_a, canonical_relation_query
 
 class CognitiveDataTests(unittest.TestCase):
@@ -104,13 +105,33 @@ class CognitiveDataTests(unittest.TestCase):
         logits = memory(x, x)
         self.assertEqual(tuple(logits.shape), (4, 4))
 
+    def test_subword_tokenizer_round_trips_unseen_words(self):
+        training_texts = [
+            "<|assistant|> Hello there. This is a small language model.",
+            "<|user|> Can you explain a small language model?",
+        ] * 3
+        tokenizer = VocabularyTokenizer.build(training_texts, max_vocab=1024, min_frequency=2)
+        sample = "<|user|> A never-seen flibbertigibbet walks in."
+        self.assertEqual(tokenizer.decode(tokenizer.encode(sample)), sample)
+        self.assertGreater(tokenizer.vocab_size, 259)
+
     def test_neural_language_generator_shape_and_sampling(self):
-        config = {"block_size": 24, "dim": 32, "layers": 1, "heads": 2, "dropout": 0.0}
+        tokenizer = VocabularyTokenizer.build(
+            ["<|assistant|> Hello there. This is a small language model."] * 4,
+            max_vocab=1024, min_frequency=2,
+        )
+        config = {
+            "block_size": 24, "dim": 32, "layers": 1, "heads": 2,
+            "dropout": 0.0, "vocab_size": tokenizer.vocab_size,
+            "pad_id": tokenizer.PAD_ID, "eos_id": tokenizer.EOS_ID,
+        }
         generator = NeuralLanguageGenerator(config)
-        tokens = torch.randint(0, NeuralLanguageGenerator.vocab_size, (2, 16))
+        tokens = torch.randint(0, tokenizer.vocab_size, (2, 16))
         logits = generator(tokens)
-        self.assertEqual(tuple(logits.shape), (2, 16, NeuralLanguageGenerator.vocab_size))
-        generated = generator.generate("<|assistant|>", max_new_tokens=12, temperature=0.0)
+        self.assertEqual(tuple(logits.shape), (2, 16, tokenizer.vocab_size))
+        generated = generator.generate(
+            "<|assistant|>", tokenizer, max_new_tokens=12, temperature=0.0
+        )
         self.assertIsInstance(generated, str)
 
 if __name__ == "__main__":
