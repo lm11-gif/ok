@@ -1,4 +1,4 @@
-name: Check ORBIT Cognitive v2.1
+name: Check ORBIT Cognitive v2.2 Conversational
 on:
   push:
     branches: [main]
@@ -81,5 +81,5 @@ jobs:
                       cwd=folder, input="/exit", text=True, capture_output=True, timeout=120
                   )
                   assert result.returncode == 0, result.stderr
-                  assert "neural subword generator" in result.stdout
+                  assert "conversational neural generator" in result.stdout
           PY
