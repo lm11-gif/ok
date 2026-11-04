@@ -9,7 +9,7 @@ separate ORBIT Seed model experiments.
 - [ORBIT Seed v0.1](orbit/seed_model/README.md) — the original 871k-parameter model trained from random initialization. It is an educational prototype and is not yet a coherent general-purpose assistant.
 - [ORBIT Seed v0.2](orbit/seed_model_v0.2/README.md) — a separate conversational model fine-tuned from pretrained SmolLM2-360M. This version is **not** scratch-trained.
 - [ORBIT Seed v0.3 Scratch](orbit/seed_model_v0.3_scratch/README.md) — a separate model with random student-weight initialization, its own tokenizer, FineWeb-Edu pretraining, assistant tuning, and a scratch-specific teacher DPO stage.
-- [ORBIT Cognitive v1](orbit/cognitive/README.md) — three randomly initialised specialist networks, GPU training code, inference, tests, and a manual Kaggle workflow. First Tesla T4 training run succeeded; a revised multi-answer training pass is being validated.
+- [ORBIT Cognitive v1](orbit/cognitive/README.md) — three randomly initialised specialist networks, GPU training code, inference, tests, and a manual Kaggle workflow. Revised three-network model trained successfully on a Tesla T4 and published; inference-controller refinements are in CI.
 
 ## Model lineage
 
