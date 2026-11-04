@@ -2,7 +2,7 @@ import unittest
 import torch
 from orbit.cognitive.core import build_seed_data, encode_examples, encode_text
 from orbit.cognitive.models import PerceptionNet, AssociationNet, MemoryNet
-from orbit.cognitive.chat import entity_aliases, find_mentioned_entities, relation_hint, compose_is_a
+from orbit.cognitive.chat import entity_aliases, find_mentioned_entities, relation_hint, compose_is_a, canonical_relation_query
 
 class CognitiveDataTests(unittest.TestCase):
     def test_seed_data_is_nonempty_and_split(self):
@@ -77,6 +77,11 @@ class CognitiveDataTests(unittest.TestCase):
         self.assertEqual(relation_hint("What does a tree need?", relations), "needs")
         self.assertEqual(relation_hint("Where does a cloud form?", relations), "located_in")
         self.assertEqual(relation_hint("Where does a river flow?", relations), "flows_into")
+
+    def test_canonical_relation_query_uses_training_template(self):
+        self.assertEqual(canonical_relation_query("cat", "is_a"), "what is cat")
+        self.assertEqual(canonical_relation_query("tree", "needs"), "what does tree need")
+        self.assertEqual(canonical_relation_query("river", "flows_into"), "where does river flow")
 
     def test_is_a_answers_use_natural_articles(self):
         self.assertEqual(compose_is_a("rain", "precipitation"), "rain is precipitation.")
