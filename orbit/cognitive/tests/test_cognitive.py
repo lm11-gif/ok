@@ -3,7 +3,8 @@ import torch
 from orbit.cognitive.core import build_seed_data, encode_examples, encode_text
 from orbit.cognitive.models import PerceptionNet, AssociationNet, MemoryNet
 from orbit.cognitive.language import VocabularyTokenizer, NeuralLanguageGenerator
-from orbit.cognitive.train import assistant_target_mask, _format_daily_dialogue, _language_batch, _masked_language_loss
+from orbit.cognitive.train import assistant_target_mask, _format_daily_dialogue, _normalise_ultrachat_messages, _load_ultrachat_dialogues, _language_batch, _masked_language_loss
+from unittest.mock import patch
 from orbit.cognitive.chat import entity_aliases, find_mentioned_entities, relation_hint, compose_is_a, canonical_relation_query
 
 class CognitiveDataTests(unittest.TestCase):
@@ -91,6 +92,50 @@ class CognitiveDataTests(unittest.TestCase):
         self.assertEqual(compose_is_a("computer", "electronic device"), "computer is an electronic device.")
         self.assertEqual(compose_is_a("desk", "furniture"), "desk is furniture.")
 
+
+    def test_ultrachat_message_normalisation_preserves_conversation_order(self):
+        raw = [
+            {"role": "user", "content": "I am building a small game."},
+            {"role": "assistant", "content": "That sounds fun."},
+            {"role": "assistant", "content": "What kind of game is it?"},
+            {"role": "user", "content": "A puzzle game."},
+            {"role": "assistant", "content": "Start with one simple puzzle mechanic."},
+        ]
+        messages = _normalise_ultrachat_messages(raw)
+        self.assertEqual([item["role"] for item in messages],
+                         ["user", "assistant", "user", "assistant"])
+        self.assertIn("That sounds fun.\n\nWhat kind of game is it?", messages[1]["text"])
+        self.assertEqual(messages[-1]["text"], "Start with one simple puzzle mechanic.")
+
+    def test_ultrachat_loader_splits_conversations_and_keeps_test_separate(self):
+        def make_row(index, split):
+            return {
+                "prompt_id": f"{split}-{index}",
+                "messages": [
+                    {"role": "user", "content": f"Question number {index} in {split}."},
+                    {"role": "assistant", "content": f"First reply number {index}."},
+                    {"role": "user", "content": f"Follow-up number {index}."},
+                    {"role": "assistant", "content": f"Second reply number {index}."},
+                ],
+            }
+        train_rows = [make_row(index, "train") for index in range(30)]
+        test_rows = [make_row(index, "test") for index in range(5)]
+        def fake_download(url, label):
+            if "test_sft" in label:
+                return test_rows, "test-sha", 200
+            return train_rows, "train-sha", 1000
+        with patch("orbit.cognitive.train._download_parquet_rows", side_effect=fake_download):
+            train_docs, validation_docs, eval_examples, metadata = _load_ultrachat_dialogues(
+                seed=29, max_train_conversations=30
+            )
+        self.assertTrue(train_docs)
+        self.assertTrue(validation_docs)
+        self.assertTrue(eval_examples)
+        self.assertTrue(all("train-" in doc for doc in train_docs + validation_docs))
+        self.assertTrue(all("test-" in item["reference"] for item in eval_examples))
+        self.assertEqual(metadata["license"], "MIT")
+        self.assertEqual(metadata["sha256"]["train_shard_0000"], "train-sha")
+        self.assertNotIn("test-", "\n".join(train_docs + validation_docs))
 
     def test_daily_dialogue_formatter_preserves_alternating_multi_turn_history(self):
         row = {
