@@ -62,7 +62,7 @@ class VocabularyTokenizer:
                 result.extend(piece.encode("utf-8"))
         return result
 
-    def decode(self, token_ids: list[int] | tuple[int, ...]) -> str:
+    def decode(self, token_ids: list[int] | tuple[int, ...],\n               stop_at_chat_marker: bool = False) -> str:
         pieces: list[str] = []
         byte_buffer = bytearray()
 
@@ -71,7 +71,7 @@ class VocabularyTokenizer:
                 pieces.append(bytes(byte_buffer).decode("utf-8", errors="replace"))
                 byte_buffer.clear()
 
-        stop_tokens = {"<|end|>", "<|user|>", "<|assistant|>"}
+        stop_tokens = {"<|end|>"}\n        if stop_at_chat_marker:\n            stop_tokens.update({"<|user|>", "<|assistant|>"})
         for raw_id in token_ids:
             token_id = int(raw_id)
             if token_id == self.EOS_ID or token_id == self.PAD_ID:
@@ -254,4 +254,4 @@ class NeuralLanguageGenerator(nn.Module):
                 tokens,
                 torch.tensor([[next_id]], dtype=torch.long, device=tokens.device),
             ), dim=1)
-        return tokenizer.decode(generated)
+        return tokenizer.decode(generated, stop_at_chat_marker=True)
