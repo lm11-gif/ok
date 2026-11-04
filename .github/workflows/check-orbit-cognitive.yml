@@ -1,4 +1,4 @@
-name: Check ORBIT Cognitive v2
+name: Check ORBIT Cognitive v2.1
 on:
   push:
     branches: [main]
@@ -31,7 +31,7 @@ jobs:
           python -m pip install --upgrade pip numpy
           python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
       - name: Compile Cognitive scripts
-        run: python -m py_compile orbit/cognitive/core.py orbit/cognitive/models.py orbit/cognitive/train.py orbit/cognitive/chat.py orbit/cognitive/bundle_kaggle.py orbit/cognitive/tests/test_cognitive.py
+        run: python -m py_compile orbit/cognitive/core.py orbit/cognitive/models.py orbit/cognitive/language.py orbit/cognitive/train.py orbit/cognitive/chat.py orbit/cognitive/bundle_kaggle.py orbit/cognitive/tests/test_cognitive.py
       - name: Run unit tests
         run: python -m unittest discover -s orbit/cognitive/tests -v
       - name: Build self-contained Kaggle script
@@ -64,7 +64,7 @@ jobs:
           path = os.path.join(os.environ["RUNNER_TEMP"], "orbit-cognitive-smoke.zip")
           with zipfile.ZipFile(path) as z:
               names = set(z.namelist())
-              required = {"perception.pt", "association.pt", "memory.pt", "generator.pt", "config.json", "training_report.json", "chat.py", "core.py", "models.py", "README.txt", "run_orbit.bat"}
+              required = {"perception.pt", "association.pt", "memory.pt", "generator.pt", "config.json", "training_report.json", "chat.py", "core.py", "models.py", "language.py", "tokenizer.json", "README.txt", "run_orbit.bat"}
               missing = required - names
               if missing:
                   raise SystemExit(f"Missing smoke archive files: {sorted(missing)}")
@@ -81,5 +81,5 @@ jobs:
                       cwd=folder, input="/exit", text=True, capture_output=True, timeout=120
                   )
                   assert result.returncode == 0, result.stderr
-                  assert "neural byte-level generator" in result.stdout
+                  assert "neural subword generator" in result.stdout
           PY
