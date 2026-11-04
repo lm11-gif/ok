@@ -43,7 +43,7 @@ jobs:
           api.authenticate()
 
           print("Kaggle CLI auth succeeded; looking up the ORBIT v0.2 notebook.")
-          kernels = api.kernel_list(search="ORBIT Seed v0.2", user=owner)
+          kernels = api.kernels_list(search="ORBIT Seed v0.2", user=owner)
           matches = [
               item for item in kernels
               if getattr(item, "title", None) == "ORBIT Seed v0.2 Fine-tuning"
