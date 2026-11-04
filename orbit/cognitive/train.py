@@ -601,6 +601,54 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
     }, config
 
 
+def write_runtime_package(output: Path) -> list[str]:
+    """Add the complete inference runner to the model archive."""
+    names = ["chat.py", "core.py", "models.py", "requirements.txt"]
+    embedded = globals().get("RUNTIME_SOURCE_FILES")
+    source_root = Path(__file__).resolve().parent
+    written = []
+    for name in names:
+        if isinstance(embedded, dict) and name in embedded:
+            content = str(embedded[name])
+        else:
+            source_path = source_root / name
+            if not source_path.is_file():
+                raise FileNotFoundError(f"Cannot package inference source file: {source_path}")
+            content = source_path.read_text(encoding="utf-8")
+        (output / name).write_text(content, encoding="utf-8")
+        written.append(name)
+
+    (output / "README.txt").write_text(
+        "ORBIT Cognitive v2 - complete inference package\n"
+        "=================================================\n\n"
+        "This archive contains trained checkpoints, the neural language generator, "
+        "configuration, fact memory, and the Python files needed to run the model.\n\n"
+        "Requirements: Python 3.10 or newer, PyTorch, and NumPy. Dependencies are "
+        "not installed automatically. Use the Python environment where you already "
+        "installed PyTorch and NumPy.\n\n"
+        "Windows: double-click run_orbit.bat.\n"
+        "PowerShell: python chat.py --model . --device cpu\n"
+        "NVIDIA CUDA: python chat.py --model . --device cuda\n\n"
+        "Type /reset to clear conversation history and /exit to quit. The model is "
+        "experimental and may produce incoherent or incorrect answers.\n",
+        encoding="utf-8",
+    )
+    (output / "run_orbit.bat").write_text(
+        "@echo off\n"
+        "setlocal\n"
+        "cd /d \"%~dp0\"\n"
+        "if exist \"%~dp0.venv\\Scripts\\python.exe\" (\n"
+        "  \"%~dp0.venv\\Scripts\\python.exe\" chat.py --model \"%~dp0\" %*\n"
+        ") else (\n"
+        "  python chat.py --model \"%~dp0\" %*\n"
+        ")\n"
+        "echo.\n"
+        "pause\n",
+        encoding="utf-8",
+    )
+    return written
+
+
 def main():
     args = parse_args()
     if args.smoke:
@@ -719,6 +767,8 @@ def main():
             "The 67-fact graph provides narrow factual grounding; the language model can still make unsupported statements.",
         ],
     }
+    packaged_sources = write_runtime_package(output)
+    report["runtime_files"] = packaged_sources + ["README.txt", "run_orbit.bat"]
     (output / "training_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     archive = output.parent / f"{output.name}.zip"

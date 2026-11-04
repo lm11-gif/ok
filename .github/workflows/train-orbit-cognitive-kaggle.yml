@@ -8,7 +8,7 @@ on:
 permissions:
   contents: write
 concurrency:
-  group: orbit-cognitive-v1-kaggle
+  group: orbit-cognitive-v2-kaggle
   cancel-in-progress: false
 jobs:
   train:

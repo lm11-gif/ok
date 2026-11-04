@@ -60,11 +60,11 @@ jobs:
         run: |
           test -s "$RUNNER_TEMP/orbit-cognitive-smoke.zip"
           python - <<'PY'
-          import json, zipfile, os
+          import json, zipfile, os, tempfile, subprocess, sys
           path = os.path.join(os.environ["RUNNER_TEMP"], "orbit-cognitive-smoke.zip")
           with zipfile.ZipFile(path) as z:
               names = set(z.namelist())
-              required = {"perception.pt", "association.pt", "memory.pt", "generator.pt", "config.json", "training_report.json"}
+              required = {"perception.pt", "association.pt", "memory.pt", "generator.pt", "config.json", "training_report.json", "chat.py", "core.py", "models.py", "README.txt", "run_orbit.bat"}
               missing = required - names
               if missing:
                   raise SystemExit(f"Missing smoke archive files: {sorted(missing)}")
@@ -72,4 +72,15 @@ jobs:
               assert report["status"] == "smoke_test_only"
               assert report["all_students_randomly_initialised"] is True
               assert report["config"]["language_generator"]["from_scratch"] is True
+              assert "run_orbit.bat" in report["runtime_files"]
+              with tempfile.TemporaryDirectory() as folder:
+                  z.extractall(folder)
+                  result = subprocess.run(
+                      [sys.executable, "chat.py", "--model", ".", "--device", "cpu",
+                       "--max-new-tokens", "8", "--temperature", "0"],
+                      cwd=folder, input="/exit\\n", text=True, capture_output=True, timeout=120
+                  )
+                  assert result.returncode == 0, result.stderr
+                  assert "neural byte-level generator" in result.stdout
+              assert "run_orbit.bat" in report["runtime_files"]
           PY

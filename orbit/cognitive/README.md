@@ -39,13 +39,13 @@ Speed choices include GPU-resident token windows, FP16 autocast and GradScaler o
 
 ## CI and release
 
-The CPU CI validates network shapes, generation sampling, the self-contained Kaggle bundle, smoke training, checkpoint loading, chat generation, and archive contents. Only after CI succeeds should the separate Kaggle GPU workflow be triggered. The v2 release will be published as `orbit-cognitive-v2` after the new generator checkpoint is trained and validated.
+The CPU CI validates network shapes, generation sampling, the self-contained Kaggle bundle, smoke training, checkpoint loading, chat generation, and that the archive contains its own inference source files and Windows launcher. Only after CI succeeds should the separate Kaggle GPU workflow be triggered. The v2 release will be published as `orbit-cognitive-v2` after the new generator checkpoint is trained and validated.
 
 ## Run the v2 model
 
-After the `orbit-cognitive-v2` release exists, download and extract `orbit-cognitive-v2.zip`. From the repository checkout run:
+After the `orbit-cognitive-v2` release exists, download and extract `orbit-cognitive-v2.zip`. The ZIP includes the model checkpoints, chat runner, supporting Python files, and a Windows launcher. Double-click `run_orbit.bat`, or open PowerShell in the extracted folder and run:
 
-    python -m orbit.cognitive.chat --model path/to/extracted --device cpu
+    python chat.py --model . --device cpu
 
 On a machine with CUDA-compatible NVIDIA graphics, use `--device cuda`. An Intel Iris Xe laptop should use CPU.
 

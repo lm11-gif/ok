@@ -37,6 +37,18 @@ def main() -> None:
         + repr(compressed_corpus)
         + ")).decode('utf-8')"
     )
+    runtime_names = ["chat.py", "core.py", "models.py", "requirements.txt"]
+    runtime_sources = {}
+    for name in runtime_names:
+        source = (root / name).read_bytes()
+        payload = base64.b64encode(zlib.compress(source, level=9)).decode("ascii")
+        runtime_sources[name] = (
+            "zlib.decompress(base64.b64decode(" + repr(payload) + ")).decode('utf-8')"
+        )
+    runtime_assignment = "RUNTIME_SOURCE_FILES = {\n" + ",\n".join(
+        repr(name) + ": " + expression
+        for name, expression in runtime_sources.items()
+    ) + "\n}"
 
     import_block = """try:
     from .core import build_seed_data, encode_examples, encode_facts, encode_text, QUESTION_TEMPLATES
@@ -54,7 +66,7 @@ except ImportError:  # Kaggle script mode: modules are side-by-side.
         "# Generated self-contained Kaggle entry point. Do not edit directly.",
         core.rstrip(),
         models.rstrip(),
-        "import base64, zlib\n" + corpus_assignment,
+        "import base64, zlib\n" + corpus_assignment + "\n" + runtime_assignment,
         trainer.lstrip(),
         "",
     ])
