@@ -29,11 +29,11 @@ def main() -> None:
     corpus_path = corpus_script.with_name("corpus.txt")
     if not corpus_path.is_file():
         raise SystemExit("The ORBIT conversation corpus was not generated.")
-    compressed_corpus = base64.b85encode(
+    compressed_corpus = base64.b64encode(
         zlib.compress(corpus_path.read_bytes(), level=9)
     ).decode("ascii")
     corpus_assignment = (
-        "LANGUAGE_BASE_CORPUS = zlib.decompress(base64.b85decode("
+        "LANGUAGE_BASE_CORPUS = zlib.decompress(base64.b64decode("
         + repr(compressed_corpus)
         + ")).decode('utf-8')"
     )
@@ -54,7 +54,7 @@ except ImportError:  # Kaggle script mode: modules are side-by-side.
         "# Generated self-contained Kaggle entry point. Do not edit directly.",
         core.rstrip(),
         models.rstrip(),
-        "import base64, zlib\\n" + corpus_assignment,
+        "import base64, zlib\n" + corpus_assignment,
         trainer.lstrip(),
         "",
     ])

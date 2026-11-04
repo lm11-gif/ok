@@ -428,3 +428,19 @@ These chat.py-only changes do not require retraining; the checkpoint architectur
 6. Only add a ControlNet or further specialist networks when a simple rule-based baseline shows a concrete need.
 
 Keep ORBIT Seed v0.3 as a separate scratch-language-model experiment. Its Kaggle execution completed earlier, but its report commit was rejected and no v0.3 release was confirmed. Do not mix its weights or status into Cognitive v1.
+
+
+## 12. ORBIT Cognitive v2 — neural language generator (2026-11-04)
+
+The user tested Cognitive v1 and correctly observed that it returned predefined answer templates, not generated language. The user explicitly requested a neural language generator. Keep v1 release/checkpoints intact and develop the separate v2 path.
+
+Initial v2 source commit: `aca78cd5a8b2c9607ec192a7894752c296851122`. Chat integration commit: `fbc5938d42a8ef9f6529f29d99f5e2af473867d0`. A following fix commit addresses the Kaggle bundler syntax error reported by CI.
+
+- `orbit/cognitive/models.py`: `NeuralLanguageGenerator`, a randomly initialised causal Transformer that predicts UTF-8 bytes (IDs 0..255 plus EOS=256) and samples output autoregressively.
+- `orbit/cognitive/train.py`: GPU-first next-byte cross-entropy stage. It builds training data from the locally authored `orbit/seed_model/make_corpus.py` multi-turn dialogue corpus plus fact-grounded examples. Default generator settings: width 128, 4 decoder layers, 4 heads, 384-byte context, 12 epochs, batch size 32. Uses AMP/GradScaler, fused AdamW when supported, gradient clipping, validation loss and best checkpoint save.
+- `orbit/cognitive/bundle_kaggle.py`: embeds a compressed generated corpus in the self-contained offline Kaggle entry point. Use base64 (not base85) because base85 output can contain apostrophes that corrupt a Python literal. The inserted import statement must use a real newline escape, not a literal backslash followed by n.
+- `orbit/cognitive/chat.py`: v2 chat sends user text, short history, and retrieved memory to the neural generator. No template composer determines the final answer.
+- v1 archive has no generator checkpoint; v2 chat requires `generator.pt`. Keep releases and Kaggle kernel names separate.
+- The corpus is small synthetic data; expect weak initial language quality. Do not promise coherent answers. Verify sample outputs after training.
+- Latest failed earlier CI is run 41768956965: bundle builder generated invalid Python because base85 compressed data contained a quote, and the injected import string contained an escaped literal backslash-n. Fix both before proceeding.
+- Run CI before the v2 Kaggle GPU job. Only trigger via `orbit/cognitive/START_TRAINING.txt` after CI success. Do not claim v2 trained until Kaggle output archive is validated and release exists.

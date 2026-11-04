@@ -1,6 +1,6 @@
-# ORBIT Cognitive v1 — Multi-Network Architecture and Implementation
+# ORBIT Cognitive v2 — Multi-Network Architecture with Neural Generation
 
-**Status:** The revised three-network implementation has passed CI, completed a Tesla T4 training run, and been published as the orbit-cognitive-v1 release. The latest inference-controller fixes (plural forms, lexical relation routing, and natural articles) are undergoing CI. See README.md for measured GPU results and limitations.
+**Status:** v1 retrieval specialists and checkpoints remain released. v2 adds a randomly initialised causal byte-level Transformer generator and a GPU training stage. Verify v2 CI and Kaggle workflow outcomes before saying its generator is trained or released.
 
 **Purpose:** Explore a different direction for ORBIT: several small, specialised neural networks cooperating through shared memory and a controlled reasoning loop, rather than asking one small autoregressive language model to do every task.
 
@@ -119,9 +119,9 @@ All Cognitive v1 student networks should begin from random initialisation. Do no
 
 The first release should be judged on held-out task performance, not on the fact that it ran on a GPU. GPU acceleration makes training practical; it does not guarantee useful learning.
 
-## 8. Output generation
+## 8. Neural output generation (v2)
 
-Do not make a general-purpose language generator the first milestone. Start with constrained, fact-preserving response templates driven by the verified structured result. This lets us test whether the cognitive modules retrieve and reason correctly without confusing that with fluent writing. A small answer-generation network can be added later and trained on GPU once the evidence pipeline is dependable.
+The user tested Cognitive v1 and correctly observed that its template composer did not generate language. v2 adds NeuralLanguageGenerator: a randomly initialised causal Transformer with a 257-symbol byte vocabulary (UTF-8 bytes 0..255 plus EOS=256). It is trained with next-byte cross-entropy on locally authored multi-turn dialogue examples and fact-grounded Q/A records. At inference the generator receives the user message, a short conversation history, and retrieved facts as context, then samples output autoregressively. The controller no longer chooses a fixed answer sentence. This is a small experimental language model; its byte-level representation, synthetic data, and short context limit quality. Evaluate held-out prompts and actual generations before making coherence claims.
 
 ## 9. Evaluation gates
 
@@ -198,3 +198,14 @@ A local smoke harness loaded the published state dictionaries and checked common
 - Next substantive development: expand and review the fact graph; create independently authored, manually verified question sets; evaluate relation parsing, unknown abstention, evidence coverage, contradiction detection, and simple multi-step inference; then add an explicit rule engine/controller. Avoid adding more neural models until those tests establish a need.
 
 Keep ORBIT Seed v0.3 as a separate scratch-language-model experiment. Its Kaggle execution completed earlier, but its report commit was rejected and no v0.3 release was confirmed.
+
+
+## 12. v2 implementation handoff
+
+- `models.py`: adds `NeuralLanguageGenerator`, causal self-attention, and decoder blocks. The generator is randomly initialised and predicts UTF-8 bytes autoregressively.
+- `train.py`: adds a GPU-trained next-byte objective, validation-loss checkpoint selection, and `generator.pt`. Training examples come from `orbit/seed_model/make_corpus.py` plus fact-grounded records.
+- `bundle_kaggle.py`: embeds a compressed copy of the generated local corpus into the self-contained offline Kaggle entry point.
+- `chat.py`: v2 retrieves facts when possible and passes them to the neural generator. There is no fixed response template at inference.
+- `tests/test_cognitive.py` and CI: test generator shape/sampling, checkpoint loading, integration, smoke training, and archive completeness.
+- v1 remains a separate retrieval-only release. Do not load v1 weights into v2 chat; v2 requires `generator.pt`.
+- Do not report the generator as trained until the v2 Kaggle run succeeds and its output archive is validated. Do not claim good coherence without checking held-out prompts and actual samples.
