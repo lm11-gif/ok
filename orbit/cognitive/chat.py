@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run ORBIT Cognitive v2.1: specialist retrieval plus a trained subword language generator."""
+"""Run ORBIT Cognitive v2.2 Conversational: specialist retrieval plus a trained subword language generator."""
 from __future__ import annotations
 import argparse
 import json
