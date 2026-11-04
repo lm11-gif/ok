@@ -22,6 +22,7 @@ def main() -> None:
     root = Path(__file__).resolve().parent
     core = (root / "core.py").read_text(encoding="utf-8")
     models = strip_future_import((root / "models.py").read_text(encoding="utf-8"))
+    language = strip_future_import((root / "language.py").read_text(encoding="utf-8"))
     trainer = strip_future_import((root / "train.py").read_text(encoding="utf-8"))
     corpus_script = root.parent / "seed_model" / "make_corpus.py"
     with redirect_stdout(io.StringIO()):
@@ -37,7 +38,7 @@ def main() -> None:
         + repr(compressed_corpus)
         + ")).decode('utf-8')"
     )
-    runtime_names = ["chat.py", "core.py", "models.py", "requirements.txt"]
+    runtime_names = ["chat.py", "core.py", "models.py", "language.py", "requirements.txt"]
     runtime_sources = {}
     for name in runtime_names:
         source = (root / name).read_bytes()
@@ -52,10 +53,12 @@ def main() -> None:
 
     import_block = """try:
     from .core import build_seed_data, encode_examples, encode_facts, encode_text, QUESTION_TEMPLATES
-    from .models import PerceptionNet, AssociationNet, MemoryNet, NeuralLanguageGenerator
+    from .models import PerceptionNet, AssociationNet, MemoryNet
+    from .language import VocabularyTokenizer, NeuralLanguageGenerator
 except ImportError:  # Kaggle script mode: modules are side-by-side.
     from core import build_seed_data, encode_examples, encode_facts, encode_text, QUESTION_TEMPLATES
-    from models import PerceptionNet, AssociationNet, MemoryNet, NeuralLanguageGenerator
+    from models import PerceptionNet, AssociationNet, MemoryNet
+    from language import VocabularyTokenizer, NeuralLanguageGenerator
 """
     if import_block not in trainer:
         raise SystemExit("Could not locate the expected module-import block in train.py.")
