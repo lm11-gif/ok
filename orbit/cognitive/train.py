@@ -115,6 +115,7 @@ def run_perception(data, device, out_dir, args, amp_enabled):
     best_score, best_state, best_epoch = -1.0, None, 0
     epochs = 1 if args.smoke else args.epochs_perception
     sync_cuda(device)
+    sync_cuda(device)
     start = time.perf_counter()
     for epoch in range(epochs):
         model.train()
@@ -144,6 +145,7 @@ def run_perception(data, device, out_dir, args, amp_enabled):
     with torch.no_grad(), autocast_context(device, amp_enabled):
         st, rt = model(qx)
         test_metrics = {"subject_accuracy": accuracy(st, qs), "relation_accuracy": accuracy(rt, qr)}
+    sync_cuda(device)
     sync_cuda(device)
     elapsed = time.perf_counter() - start
     save_checkpoint(out_dir / "perception.pt", model, {
@@ -220,6 +222,7 @@ def run_association(data, device, out_dir, args, amp_enabled):
     model.eval()
     with torch.no_grad(), autocast_context(device, amp_enabled):
         known_metrics = group_metrics(model(subjects, relations), targets)
+    sync_cuda(device)
     elapsed = time.perf_counter() - start
     save_checkpoint(out_dir / "association.pt", model, {
         "name": "AssociationNet",
@@ -310,6 +313,7 @@ def run_memory(data, device, out_dir, args, amp_enabled):
     with torch.no_grad(), autocast_context(device, amp_enabled):
         test_logits = model(test_x, facts_x)
         test_metrics = retrieval_metrics(test_logits, test_targets)
+    sync_cuda(device)
     elapsed = time.perf_counter() - start
     save_checkpoint(out_dir / "memory.pt", model, {
         "name": "MemoryNet",
