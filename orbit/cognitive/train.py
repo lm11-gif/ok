@@ -1121,7 +1121,7 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
         "dropout": 0.10,
         "tokenizer": tokenizer.FORMAT,
         "from_scratch": True,
-        "objective": "assistant-only causal next-token prediction over multi-turn context",
+        "objective": "full-transcript causal language warmup followed by assistant-only causal next-token fine-tuning over multi-turn context",
     }
     model = NeuralLanguageGenerator(config).to(device)
     optimizer, fused = make_optimizer(model.parameters(), args.generator_learning_rate, device)
@@ -1281,6 +1281,7 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
         "name": "NeuralLanguageGenerator",
         "random_initialisation": True,
         "objective": config["objective"],
+        "transcript_warmup_epochs": transcript_warmup_epochs,
         "best_epoch": best_epoch,
         "best_validation_assistant_loss": best_validation_loss,
         "training_documents": len(train_sequences),
