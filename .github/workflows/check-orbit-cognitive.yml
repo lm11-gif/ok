@@ -1,0 +1,48 @@
+name: Check ORBIT Cognitive v1
+on:
+  push:
+    branches: [main]
+    paths:
+      - "orbit/cognitive/**"
+      - ".github/workflows/check-orbit-cognitive.yml"
+  pull_request:
+    paths:
+      - "orbit/cognitive/**"
+      - ".github/workflows/check-orbit-cognitive.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip numpy torch
+      - name: Compile Cognitive scripts
+        run: python -m py_compile orbit/cognitive/core.py orbit/cognitive/models.py orbit/cognitive/train.py orbit/cognitive/chat.py orbit/cognitive/tests/test_cognitive.py
+      - name: Run unit tests
+        run: python -m unittest discover -s orbit/cognitive/tests -v
+      - name: Run CPU smoke training
+        run: python -m orbit.cognitive.train --device cpu --smoke --output "$RUNNER_TEMP/orbit-cognitive-smoke"
+      - name: Verify smoke-training archive
+        run: |
+          test -s "$RUNNER_TEMP/orbit-cognitive-smoke.zip"
+          python - <<'PY'
+          import json, zipfile, os
+          path = os.path.join(os.environ["RUNNER_TEMP"], "orbit-cognitive-smoke.zip")
+          with zipfile.ZipFile(path) as z:
+              names = set(z.namelist())
+              required = {"perception.pt", "association.pt", "memory.pt", "config.json", "training_report.json"}
+              missing = required - names
+              if missing:
+                  raise SystemExit(f"Missing smoke archive files: {sorted(missing)}")
+              report = json.loads(z.read("training_report.json"))
+              assert report["status"] == "smoke_test_only"
+              assert report["all_students_randomly_initialised"] is True
+          PY
