@@ -41,7 +41,7 @@ import numpy as np
 import sentencepiece as spm
 import torch
 import torch.nn.functional as F
-from safetensors.torch import save_file
+from safetensors.torch import load_file, save_file
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from chat import OrbitScratchGPT
