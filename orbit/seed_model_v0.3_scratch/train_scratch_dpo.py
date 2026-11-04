@@ -52,6 +52,7 @@ SCRATCH_RELEASE_URL = (
 )
 TEACHER_MODEL = "HuggingFaceTB/SmolLM3-3B"
 SEED = 20261104
+# The reference is a frozen copy of the scratch-trained policy before DPO.
 BETA = 0.1
 DPO_EPOCHS = 2
 LEARNING_RATE = 1.0e-5
@@ -434,6 +435,17 @@ def main():
             rr = sequence_logprob(reference, sp, p_ids, rejected_ids, block_size)
             eval_losses.append(float((-F.logsigmoid(BETA * ((pc - rc) - (pr - rr)))).item()))
 
+    smoke_prompts = prompts[:5]
+    comparisons = []
+    for prompt in smoke_prompts:
+        sft_answer = sample_student(reference, sp, prompt, temperature=0.0)
+        dpo_answer = sample_student(policy, sp, prompt, temperature=0.0)
+        comparisons.append({
+            "prompt": prompt,
+            "sft_answer": sft_answer,
+            "dpo_answer": dpo_answer,
+        })
+
     save_file(
         {k: v.detach().cpu().contiguous().clone() for k, v in policy.state_dict().items()},
         str(OUT / "model.safetensors"),
@@ -444,16 +456,6 @@ def main():
         source = BASE_DIR / notice
         if source.exists():
             shutil.copy2(source, OUT / notice)
-
-    smoke_prompts = prompts[:5]
-    comparisons = []
-    for prompt in smoke_prompts:
-        before = sample_student(
-            OrbitScratchGPT(config).cuda().eval(), sp, prompt, temperature=0.0
-        )
-        comparisons.append({"prompt": prompt, "dpo_answer": sample_student(policy, sp, prompt, temperature=0.0)})
-        del before
-        torch.cuda.empty_cache()
 
     report = {
         "name": "ORBIT Seed v0.3 Scratch DPO",
