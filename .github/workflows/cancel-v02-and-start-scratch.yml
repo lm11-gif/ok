@@ -1,4 +1,4 @@
-name: Cancel v0.2 Kaggle session before scratch training
+name: Check ORBIT Kaggle GPU sessions
 
 on:
   push:
@@ -10,73 +10,27 @@ permissions:
   contents: read
 
 concurrency:
-  group: orbit-v02-cancel-helper
+  group: orbit-kaggle-session-diagnostic
   cancel-in-progress: true
 
 jobs:
-  cancel-kaggle:
+  inspect:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     env:
-      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
-      KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
-
+      KAGGLE_API_TOKEN: \${{ secrets.KAGGLE_API_TOKEN }}
+      KAGGLE_USERNAME: \${{ secrets.KAGGLE_USERNAME }}
     steps:
-      - name: Install Kaggle client
+      - name: Install Kaggle CLI
         run: python -m pip install --upgrade kaggle
 
-      - name: Cancel verified v0.2 Kaggle session
+      - name: Check current v0.2 and v0.3 Kaggle session statuses
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          from kaggle.api.kaggle_api_extended import KaggleApi
-          from kagglesdk.kernels.types.kernels_api_service import ApiCancelKernelSessionRequest
-
-          # Verified from GitHub run 41744997703: Kaggle printed
-          # "Kernel version 2 successfully pushed" for the active v0.2 run.
-          session_id = 2
-          api = KaggleApi()
-          api.authenticate()
-          request = ApiCancelKernelSessionRequest()
-          request.kernel_session_id = session_id
-          import requests
-          import os
-          try:
-              with api.build_kaggle_client() as client:
-                  client.kernels.kernels_api_client.cancel_kernel_session(request)
-              print(f"SDK cancellation request accepted for session {session_id}.")
-          except requests.HTTPError as exc:
-              response = exc.response
-              print(
-                  "SDK cancellation response:",
-                  response.status_code if response is not None else "unknown",
-                  (response.text[:2000] if response is not None else str(exc)),
-              )
-              token = os.environ["KAGGLE_API_TOKEN"]
-              legacy = requests.post(
-                  f"https://www.kaggle.com/api/v1/kernels/cancel-session/{session_id}",
-                  headers={"Authorization": f"Bearer {token}"},
-                  timeout=45,
-              )
-              print("Legacy cancellation response:", legacy.status_code, legacy.text[:2000])
-              legacy.raise_for_status()
-          print(f"Cancellation request accepted by Kaggle for session {session_id}.")
-          PY
-
-          KERNEL_ID="dud12345/orbit-seed-v0-2-fine-tuning"
-          stopped=0
-          for attempt in $(seq 1 30); do
-            status="$(kaggle kernels status "$KERNEL_ID" 2>&1 || true)"
-            echo "$status"
-            if echo "$status" | grep -Eiq 'CANCEL_ACKNOWLEDGED|CANCEL_REQUESTED|COMPLETE|ERROR|CANCELLED|CANCELED'; then
-              stopped=1
-              break
-            fi
-            sleep 10
-          done
-          if (( stopped == 0 )); then
-            echo "::error::Kaggle did not confirm that v0.2 stopped."
-            exit 1
-          fi
-          echo "Confirmed that v0.2 Kaggle session is no longer running."
+          echo "=== v0.2 pretrained branch ==="
+          kaggle kernels status "dud12345/orbit-seed-v0-2-fine-tuning" || true
+          echo "=== v0.3 scratch branch ==="
+          kaggle kernels status "dud12345/orbit-seed-v0-3-scratch-training" || true
+          echo "=== latest v0.2 logs ==="
+          kaggle kernels logs "dud12345/orbit-seed-v0-2-fine-tuning" || true
