@@ -1,6 +1,6 @@
 # ORBIT Cognitive v1 — Multi-Network Architecture Proposal
 
-**Status:** Initial implementation is now committed in this directory. The three specialists and training workflow have not yet completed a GPU training run. See README.md for commands and current limitations.
+**Status:** Initial implementation and one successful Tesla T4 training run are complete. The latest source contains revised association and multi-positive retrieval objectives; these require a follow-up GPU run. See README.md for the measured first-run baseline and current limitations.
 
 **Purpose:** Explore a different direction for ORBIT: several small, specialised neural networks cooperating through shared memory and a controlled reasoning loop, rather than asking one small autoregressive language model to do every task.
 
@@ -101,8 +101,8 @@ All Cognitive v1 student networks should begin from random initialisation. Do no
 
 1. **Build and validate datasets.** Create labelled examples for intent/entity/relation parsing, concept-link prediction, retrieval ranking, and operation selection. Keep train/validation/test splits separate by source or underlying fact so near-duplicate examples cannot leak across splits.
 2. **Train PerceptionNet on GPU.** Supervise structured parses from varied phrasings. Evaluate intent classification, entity extraction, and relation extraction separately.
-3. **Train AssociationNet on GPU.** Use positive and negative concept pairs or graph edges. Evaluate held-out link prediction with precision, recall, and calibration.
-4. **Train MemoryNet on GPU.** Use query-to-record relevance pairs and hard negatives. Evaluate Recall@k and ranking quality on held-out queries.
+3. **Train AssociationNet on GPU.** Use multi-positive object sets for each subject/relation pair. In the initial seed-data phase, train it as a compact reconstruction cache of the known graph and label the metric as graph reconstruction, not held-out link prediction. Evaluate generalisation only after creating a genuinely held-out graph split with unseen relations/edges.
+4. **Train MemoryNet on GPU.** Use query-to-record relevance sets; when a query has multiple valid fact records, every valid record must count as a positive. Evaluate Recall@k on held-out question phrasings, with all valid records in the target set.
 5. **Integrate and jointly tune.** Connect the networks through the shared typed workspace. Train or fine-tune the controller with labelled operation traces, then optionally tune the modules together with a weighted task loss. Retain each specialist's individual validation metrics so joint training cannot hide a regression.
 6. **Package and evaluate.** Save every specialist checkpoint, shared schema/vocabulary, optimizer and scheduler state, random seeds, dataset fingerprints, metrics, and an integrated test report.
 
@@ -110,6 +110,7 @@ All Cognitive v1 student networks should begin from random initialisation. Do no
 
 - Use the Kaggle GPU, and verify torch.cuda.is_available() before starting any training epoch. Log torch.cuda.get_device_name(0) and available memory.
 - Use mixed precision only when supported by the assigned GPU; keep a safe full-precision fallback for unsupported operations.
+- Synchronise the CUDA device at both timing boundaries before calculating per-stage runtime or examples/groups/queries per second.
 - Use gradient accumulation and conservative batch sizes so the run fits the actual device.
 - Save resumable checkpoints regularly and after each specialist stage. A workflow failure during GitHub publishing must not destroy the only copy of trained weights.
 - Upload checkpoints and reports as workflow artifacts and/or a versioned release before attempting to update repository documentation. A failed README/report commit must not discard the model files.
@@ -156,18 +157,22 @@ Cognitive v1 should initially be developed independently of the v0.3 training pi
 
 ## 11. Implementation status and next steps
 
-The first implementation is committed:
+Implemented files and CI:
+- core.py, models.py, train.py, chat.py, bundle_kaggle.py, requirements.txt, and tests/test_cognitive.py.
+- CI workflow validates the bundle, unit tests, CPU smoke training, checkpoint loading/inference, and archive integrity. The current revised-code CI run is [41763677404](https://github.com/lm11-gif/ok/actions/runs/41763677404); check its final conclusion before another GPU submission.
+- The Kaggle GPU workflow is manual-only, uses the single-file bundler, records GPU environment and training timings, uploads a durable Actions artifact before release publication, and shares the repository-wide GPU concurrency lock.
 
-- core.py: curated seed knowledge graph, vocabulary builder, and deterministic train/validation/test question generation.
-- models.py: randomly initialised PerceptionNet, AssociationNet, and MemoryNet.
-- train.py: GPU-first staged training, validation, timing, checkpointing, and model archive creation.
-- chat.py: inference controller combining perception, graph association, memory retrieval, and conservative template answers.
-- tests/test_cognitive.py: data and network-shape tests.
-- check-orbit-cognitive.yml: Python checks, unit tests, and a one-epoch CPU smoke run for CI only.
-- train-orbit-cognitive-kaggle.yml: manual Kaggle GPU training, output validation, Actions artifact upload, and release publication.
+The first T4 training run is complete: [41763096394](https://github.com/lm11-gif/ok/actions/runs/41763096394). It took 7.84 seconds measured training time with FP16 and fused AdamW, with 0.029 GB peak allocated GPU memory. PerceptionNet scored 100% subject accuracy and 75.4% relation accuracy on template-held-out test phrasings. Initial AssociationNet had 0% held-out top-1 and initial MemoryNet top-5 recall of 97.8%; memory evaluation used single-fact labels for multi-fact questions, so these values are historical baseline only and not comparable to corrected metrics.
 
-Next steps:
-1. Wait for and inspect the CI run; fix every failing syntax, unit, or smoke-training check.
-2. Only after CI passes, manually trigger the Kaggle workflow. It uses the existing Kaggle Actions secrets and does not run on ordinary code pushes.
-3. Inspect actual GPU metrics and held-out test scores; do not equate GPU execution or synthetic-template accuracy with general intelligence.
-4. Preserve the v0.3 scratch experiment separately and continue trying to recover its completed Kaggle output without retraining.
+Latest model changes:
+- AssociationNet now has separate subject/object embeddings and trains multi-positive object sets over the complete seed graph. Its reported score is graph reconstruction, not held-out generalisation.
+- MemoryNet now groups all valid fact records for a question into a multi-positive target set.
+- Inference returns all retrieved valid facts for a subject/relation query, e.g. both water and sunlight for “what does a tree need?”
+- CUDA is synchronised at timing boundaries, and per-stage examples/groups/queries per second are reported.
+
+Next:
+1. Inspect CI run 41763677404 for success before a follow-up Kaggle submission.
+2. If CI is green and no Kaggle run is active, submit the revised trainer through the existing canonical kernel owner/slug.
+3. Inspect the new report. Compare runtime only with context (same T4, dataset, PyTorch build, and objective changes) and do not claim speed improvements absent a controlled baseline.
+4. Keep this seed knowledge graph labelled as a bootstrap dataset. Before expanding claims, add independently authored facts and manually written held-out language tests.
+5. Preserve v0.3 as a separate scratch-LM experiment and keep its recovery status distinct.
