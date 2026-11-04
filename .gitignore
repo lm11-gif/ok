@@ -13,3 +13,5 @@ orbit/seed_model/orbit-seed-gpu-checkpoint.zip
 
 # Local notebook files
 .ipynb_checkpoints/
+
+orbit/seed_model/corpus.txt
