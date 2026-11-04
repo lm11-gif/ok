@@ -30,13 +30,23 @@ subprocess.run(
     check=True,
 )
 
+# Kaggle currently ships torchao 0.10 on some images, while the installed
+# PEFT version expects torchao >=0.16 if that optional backend is present.
+# ORBIT does not use torchao, so remove the incompatible optional package.
+subprocess.run(
+    [sys.executable, "-m", "pip", "uninstall", "-y", "torchao"],
+    check=False,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    text=True,
+)
+
 import torch
 from datasets import load_dataset
 from peft import LoraConfig, get_peft_model
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
-    DataCollatorForLanguageModeling,
     Trainer,
     TrainingArguments,
 )
@@ -106,8 +116,26 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(CHAT_TOKENIZER, use_fast=True)
     if not tokenizer.chat_template:
         raise RuntimeError("The selected SmolLM2 instruct tokenizer has no chat template.")
-    # Use a distinct padding token so the data collator does not mask genuine
-    # end-of-turn/end-of-sequence tokens from the training loss.
+
+    # The upstream SmolLM2 template has no {generation} markers. Add them
+    # around assistant messages so we can train only on assistant responses,
+    # not on the user/system prompt tokens.
+    tokenizer.chat_template = (
+        "{% for message in messages %}"
+        "{% if loop.first and messages[0]['role'] != 'system' %}"
+        "{{ '<|im_start|>system\\nYou are a helpful AI assistant named ORBIT<|im_end|>\\n' }}"
+        "{% endif %}"
+        "{% if message['role'] == 'assistant' %}"
+        "{{ '<|im_start|>assistant\\n' }}"
+        "{% generation %}{{ message['content'] }}{{ '<|im_end|>\\n' }}{% endgeneration %}"
+        "{% else %}"
+        "{{ '<|im_start|>' + message['role'] + '\\n' + message['content'] + '<|im_end|>\\n' }}"
+        "{% endif %}"
+        "{% endfor %}"
+        "{% if add_generation_prompt %}{{ '<|im_start|>assistant\\n' }}{% endif %}"
+    )
+
+    # Use a distinct padding token so padding can be excluded from the loss.
     if tokenizer.pad_token is None or tokenizer.pad_token_id == tokenizer.eos_token_id:
         tokenizer.add_special_tokens({"pad_token": "<|orbit_pad|>"})
     tokenizer.padding_side = "right"
@@ -154,30 +182,67 @@ def main():
     def tokenize_batch(batch):
         all_ids = []
         all_masks = []
+        all_labels = []
         for raw_messages in batch["messages"]:
             messages = make_messages(raw_messages)
             if messages is None:
                 continue
             try:
-                formatted = tokenizer.apply_chat_template(
+                encoded = tokenizer.apply_chat_template(
                     messages,
-                    tokenize=False,
+                    tokenize=True,
                     add_generation_prompt=False,
-                )
-                encoded = tokenizer(
-                    formatted,
+                    return_dict=True,
+                    return_assistant_tokens_mask=True,
                     truncation=True,
                     max_length=MAX_LENGTH,
-                    add_special_tokens=False,
                 )
                 ids = encoded["input_ids"]
-                if len(ids) < 8:
+                assistant_mask = encoded.get("assistant_masks")
+                if assistant_mask is None:
+                    raise RuntimeError(
+                        "Tokenizer did not return assistant_masks; refusing to train on user text."
+                    )
+                if len(ids) < 8 or not any(assistant_mask):
                     continue
+                labels = [
+                    token_id if is_assistant else -100
+                    for token_id, is_assistant in zip(ids, assistant_mask)
+                ]
                 all_ids.append(ids)
                 all_masks.append(encoded["attention_mask"])
+                all_labels.append(labels)
             except Exception as exc:
                 print(f"Skipping malformed conversation: {exc}", flush=True)
-        return {"input_ids": all_ids, "attention_mask": all_masks}
+        return {
+            "input_ids": all_ids,
+            "attention_mask": all_masks,
+            "labels": all_labels,
+        }
+
+    class AssistantOnlyCollator:
+        def __init__(self, tokenizer):
+            self.tokenizer = tokenizer
+
+        def __call__(self, features):
+            model_inputs = [
+                {
+                    "input_ids": feature["input_ids"],
+                    "attention_mask": feature["attention_mask"],
+                }
+                for feature in features
+            ]
+            batch = self.tokenizer.pad(
+                model_inputs,
+                padding=True,
+                return_tensors="pt",
+            )
+            labels = torch.full_like(batch["input_ids"], -100)
+            for row, feature in enumerate(features):
+                row_labels = torch.tensor(feature["labels"], dtype=torch.long)
+                labels[row, : row_labels.numel()] = row_labels
+            batch["labels"] = labels
+            return batch
 
     print("Tokenizing train and held-out test conversations...", flush=True)
     train_ds = train_raw.map(
@@ -199,7 +264,16 @@ def main():
             f"Not enough usable conversations after filtering: train={len(train_ds)}, eval={len(eval_ds)}"
         )
 
-    collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+    collator = AssistantOnlyCollator(tokenizer)
+    supervised_tokens = sum(
+        sum(1 for token_id in row["labels"] if token_id != -100)
+        for row in train_ds
+    )
+    if supervised_tokens < 10_000:
+        raise RuntimeError(
+            f"Too few assistant-only target tokens after preprocessing: {supervised_tokens}"
+        )
+    print(f"Assistant-only supervised tokens: {supervised_tokens:,}", flush=True)
     args = TrainingArguments(
         output_dir=str(WORK / "orbit-v02-training"),
         num_train_epochs=EPOCHS,
