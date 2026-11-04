@@ -1,0 +1,2 @@
+# Kaggle supplies PyTorch; install it separately for local use.
+numpy>=1.24
