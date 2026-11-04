@@ -3,7 +3,7 @@ import torch
 from orbit.cognitive.core import build_seed_data, encode_examples, encode_text
 from orbit.cognitive.models import PerceptionNet, AssociationNet, MemoryNet
 from orbit.cognitive.language import VocabularyTokenizer, NeuralLanguageGenerator
-from orbit.cognitive.train import assistant_target_mask, _format_daily_dialogue, _normalise_ultrachat_messages, _load_ultrachat_dialogues, _generate_conversation_rollouts, _language_batch, _masked_language_loss
+from orbit.cognitive.train import assistant_target_mask, _format_daily_dialogue, _normalise_ultrachat_messages, _load_ultrachat_dialogues, _generate_conversation_rollouts, _language_batch, _masked_language_loss, _prepare_language_sampler
 from unittest.mock import patch
 from orbit.cognitive.chat import entity_aliases, find_mentioned_entities, relation_hint, compose_is_a, canonical_relation_query, build_conversation_prompt
 
@@ -281,9 +281,10 @@ class CognitiveDataTests(unittest.TestCase):
         ids = tokenizer.encode(text) + [tokenizer.EOS_ID]
         sequence = torch.tensor(ids, dtype=torch.long)
         mask = assistant_target_mask(ids, tokenizer)
+        eligible = _prepare_language_sampler([sequence], [mask], block_size=24)
         inputs, targets, loss_masks = _language_batch(
             [sequence], [mask], block_size=24, batch_size=8,
-            pad_id=tokenizer.PAD_ID, device=torch.device("cpu"),
+            pad_id=tokenizer.PAD_ID, device=torch.device("cpu"), eligible=eligible,
         )
         self.assertEqual(tuple(inputs.shape), (8, 24))
         self.assertEqual(tuple(targets.shape), (8, 24))
