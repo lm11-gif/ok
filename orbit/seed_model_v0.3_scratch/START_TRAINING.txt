@@ -1,0 +1,2 @@
+ORBIT Seed v0.3 Scratch is a separate from-scratch model path.
+Update this file to start the Kaggle GPU workflow after the current ORBIT v0.2 GPU job has finished.
