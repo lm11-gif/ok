@@ -37,7 +37,7 @@ def parse_args():
     parser.add_argument("--epochs-perception", type=int, default=35)
     parser.add_argument("--epochs-association", type=int, default=70)
     parser.add_argument("--epochs-memory", type=int, default=50)
-    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--dim", type=int, default=96)
     parser.add_argument("--learning-rate", type=float, default=0.002)
     parser.add_argument("--seed", type=int, default=20261104)
