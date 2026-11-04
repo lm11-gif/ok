@@ -22,3 +22,4 @@ jobs:
           set -euo pipefail
           gh run cancel 41742122558 --repo "$GITHUB_REPOSITORY" || true
           gh run cancel 41744872568 --repo "$GITHUB_REPOSITORY" || true
+          gh run cancel 41747352527 --repo "$GITHUB_REPOSITORY" || true
