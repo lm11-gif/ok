@@ -1,2 +1,3 @@
 After Kaggle credentials are configured, updating this file starts ORBIT Seed v0.2 fine-tuning.
 Launch corrected ORBIT Seed v0.2 training — assistant-only SFT — 2026-11-04
+Launch retry after fixing the optional torchao dependency and Kaggle notebook ref — 2026-11-04
