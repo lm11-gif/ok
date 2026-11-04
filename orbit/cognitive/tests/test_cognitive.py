@@ -25,6 +25,18 @@ class CognitiveDataTests(unittest.TestCase):
                         for row in split if row["fact_id"] == fact["id"]]
             self.assertEqual(len(examples), 10)
 
+    def test_association_groups_allow_multiple_correct_objects(self):
+        data = build_seed_data()
+        subject_id = data["entity_to_id"]["tree"]
+        relation_id = data["relation_to_id"]["needs"]
+        groups = [
+            group for split in data["association_splits"].values()
+            for group in split
+            if group["subject_id"] == subject_id and group["relation_id"] == relation_id
+        ]
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(len(groups[0]["object_ids"]), 2)
+
     def test_neural_module_shapes(self):
         data = build_seed_data()
         x, subjects, relations, _ = encode_examples(data["examples"]["train"][:4], data["vocab"])
