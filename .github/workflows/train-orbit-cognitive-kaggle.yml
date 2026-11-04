@@ -149,7 +149,7 @@ jobs:
           cat > "$NOTES" <<'EOF'
           ORBIT Cognitive v2.1 is an experimental, GPU-trained multi-network prototype.
           PerceptionNet, AssociationNet, MemoryNet, and NeuralLanguageGenerator are randomly initialised.
-          The generator learns causal next-byte prediction from an original synthetic dialogue corpus and fact-grounded examples.
+          The generator uses a learned word/punctuation vocabulary with UTF-8 byte fallback. Training windows never cross document boundaries, and the report includes generated prompt-evaluation samples.
           The release contains all specialist checkpoints, the seed fact graph,
           vocabularies, configuration, and training/evaluation report.
           It is not a general-purpose assistant.
