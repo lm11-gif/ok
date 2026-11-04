@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: orbit-v02-kaggle-training
+  group: orbit-v02-kaggle-training-canonical
   cancel-in-progress: false
 
 jobs:
