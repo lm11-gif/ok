@@ -85,6 +85,11 @@ def new_scaler(device: torch.device, amp_enabled: bool):
         return torch.cuda.amp.GradScaler(enabled=enabled)
 
 
+def sync_cuda(device: torch.device):
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+
+
 def accuracy(logits: torch.Tensor, targets: torch.Tensor) -> float:
     return float((logits.argmax(dim=-1) == targets).float().mean().item())
 
@@ -109,6 +114,7 @@ def run_perception(data, device, out_dir, args, amp_enabled):
     scaler = new_scaler(device, amp_enabled)
     best_score, best_state, best_epoch = -1.0, None, 0
     epochs = 1 if args.smoke else args.epochs_perception
+    sync_cuda(device)
     start = time.perf_counter()
     for epoch in range(epochs):
         model.train()
@@ -122,6 +128,7 @@ def run_perception(data, device, out_dir, args, amp_enabled):
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
+        epochs_ran = epoch + 1
         model.eval()
         with torch.no_grad(), autocast_context(device, amp_enabled):
             sv, rv = model(vx)
@@ -137,6 +144,7 @@ def run_perception(data, device, out_dir, args, amp_enabled):
     with torch.no_grad(), autocast_context(device, amp_enabled):
         st, rt = model(qx)
         test_metrics = {"subject_accuracy": accuracy(st, qs), "relation_accuracy": accuracy(rt, qr)}
+    sync_cuda(device)
     elapsed = time.perf_counter() - start
     save_checkpoint(out_dir / "perception.pt", model, {
         "name": "PerceptionNet", "random_initialisation": True,
@@ -147,6 +155,8 @@ def run_perception(data, device, out_dir, args, amp_enabled):
         "validation_score": best_score, "best_epoch": best_epoch,
         "test": test_metrics, "seconds": elapsed, "fused_adamw": fused,
         "train_examples": int(tx.shape[0]),
+        "epochs_run": epochs_ran,
+        "training_examples_per_second": round(int(tx.shape[0]) * epochs_ran / max(elapsed, 1e-9), 2),
         "parameters": sum(parameter.numel() for parameter in model.parameters()),
     }
 
@@ -193,6 +203,7 @@ def run_association(data, device, out_dir, args, amp_enabled):
             scaler.step(optimizer)
             scaler.update()
 
+        epochs_ran = epoch + 1
         model.eval()
         with torch.no_grad(), autocast_context(device, amp_enabled):
             logits = model(subjects, relations)
@@ -227,6 +238,8 @@ def run_association(data, device, out_dir, args, amp_enabled):
         "seconds": elapsed,
         "fused_adamw": fused,
         "train_subject_relation_groups": int(subjects.shape[0]),
+        "epochs_run": epochs_ran,
+        "training_groups_per_second": round(int(subjects.shape[0]) * epochs_ran / max(elapsed, 1e-9), 2),
         "parameters": sum(parameter.numel() for parameter in model.parameters()),
         "evaluation_scope": "known graph reconstruction only; not held-out link prediction",
     }
@@ -277,6 +290,7 @@ def run_memory(data, device, out_dir, args, amp_enabled):
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
+        epochs_ran = epoch + 1
         model.eval()
         val_x, val_targets = encoded["validation"]
         with torch.no_grad(), autocast_context(device, amp_enabled):
@@ -313,6 +327,8 @@ def run_memory(data, device, out_dir, args, amp_enabled):
         "fused_adamw": fused,
         "train_queries": int(train_x.shape[0]),
         "memory_records": int(facts_x.shape[0]),
+        "epochs_run": epochs_ran,
+        "training_queries_per_second": round(int(train_x.shape[0]) * epochs_ran / max(elapsed, 1e-9), 2),
         "parameters": sum(parameter.numel() for parameter in model.parameters()),
     }
 
