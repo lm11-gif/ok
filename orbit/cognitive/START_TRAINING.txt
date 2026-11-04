@@ -1,2 +1,2 @@
-GPU training requested on 2026-11-04 after bundled-entrypoint CI run 41762951187 passed.
-Submit a new version of the existing canonical kernel dud12345/orbit-cognitive-v1-gpu-training. The previous version failed before training because Kaggle did not expose adjacent Python modules; this version must use bundle_kaggle.py and then run PerceptionNet, AssociationNet, and MemoryNet from random initialisation.
+GPU retraining requested on 2026-11-04 after revised-code CI run 41763985893 passed.
+Submit a new version of the existing canonical kernel dud12345/orbit-cognitive-v1-gpu-training. This run includes asymmetric AssociationNet with multi-positive known-graph reconstruction, MemoryNet multi-positive fact targets, and CUDA-synchronised stage timing/throughput reporting. Do not create a second concurrent Kaggle GPU kernel.
