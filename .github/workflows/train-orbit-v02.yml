@@ -12,10 +12,11 @@ permissions:
 
 concurrency:
   group: orbit-v02-kaggle-training-canonical
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   train:
+    if: ${{ github.event_name != 'push' || !contains(github.event.head_commit.message, '[cancel-only]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 350
     env:
