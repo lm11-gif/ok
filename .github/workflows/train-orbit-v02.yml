@@ -16,6 +16,9 @@ concurrency:
 
 jobs:
   train:
+    concurrency:
+      group: orbit-kaggle-gpu-shared
+      cancel-in-progress: false
     if: ${{ github.event_name != 'push' || !contains(github.event.head_commit.message, '[cancel-only]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 350
