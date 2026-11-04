@@ -28,13 +28,13 @@ jobs:
         run: python -m py_compile orbit/seed_model_v0.2/train_dpo.py
 
   dpo:
-    if: \${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 350
     env:
-      KAGGLE_API_TOKEN: \${{ secrets.KAGGLE_API_TOKEN }}
-      KAGGLE_USERNAME: \${{ secrets.KAGGLE_USERNAME }}
-      GH_TOKEN: \${{ github.token }}
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+      GH_TOKEN: ${{ github.token }}
 
     steps:
       - name: Check out the latest ORBIT repository
