@@ -181,13 +181,11 @@ Kaggle GitHub Actions secrets already configured:
 
 Never print, retrieve, or request the values of these secrets.
 
-### Workflow sequence currently configured
+### Workflow sequence and latest real execution
 
-1. v0.2 SFT is running first.
-2. When v0.2 SFT completes successfully, the v0.2 DPO workflow should run.
-3. When the v0.2 DPO workflow itself completes through a `workflow_run` event, the v0.3 Scratch training workflow is configured to start. It is intentionally serialized to avoid simultaneous Kaggle GPU jobs.
-4. When v0.3 Scratch training succeeds and publishes its release, v0.3 Scratch DPO should start.
-5. v0.3 DPO publishes a separate scratch-DPO release.
+The workflows were originally configured as a serialized v0.2 SFT → v0.2 DPO → v0.3 Scratch → v0.3 Scratch DPO chain. That complete chain did **not** execute: the user manually cancelled v0.2 before a v0.2 checkpoint or DPO run existed. The v0.3 Scratch run was then submitted directly. Its Kaggle notebook completed, but its GitHub report-commit step failed due to a non-fast-forward push, so the v0.3 release was skipped. The v0.3 Scratch DPO stage has not been verified as run. See the latest handoff in Section 6A below.
+
+Do not infer that a configured `workflow_run` chain completed simply because its workflow files exist. Verify every job and step.
 
 The v0.3 scratch workflow also has `workflow_dispatch`, so a manual run from GitHub Actions can start it without waiting for the v0.2 chain. Avoid doing this while another Kaggle job is using the same free quota unless the user explicitly wants that.
 
@@ -201,10 +199,9 @@ The observed v0.2 kernel reference was `dud12345/orbit-seed-v0-2-fine-tuning`. I
 
 ---
 
-## 6A. Latest training handoff — 2026-11-04 01:10 UTC
+## 6A. Latest training handoff — 2026-11-04 (after Kaggle completion)
 
-This supersedes the older status snapshot below. Check live status again
-before continuing.
+This section supersedes the 01:10 UTC snapshot and all older running-status notes below. It reflects the latest verified state from GitHub Actions job 126314079773 in workflow run 41750482331. Check current status again before starting any new run.
 
 ### User-requested stop-v0.2 / start-v0.3 transition — verified successful
 
@@ -227,23 +224,22 @@ before continuing.
   the user's manual cancellation succeeded and Kaggle confirmed it.
 - There should now be only the v0.3 Kaggle training job consuming GPU.
 
-### v0.3 Scratch GPU job
+### v0.3 Scratch GPU job — completed, but release/reporting incomplete
 
 - Scratch workflow run
   [41750482331](https://github.com/lm11-gif/ok/actions/runs/41750482331)
-  is **in_progress**.
-- Kaggle notebook:
-  `dud12345/orbit-seed-v0-3-scratch-training`.
-- Last verified Kaggle status: `KernelWorkerStatus.RUNNING`.
-- GitHub Actions passed scratch script syntax, Kaggle credentials, CLI
-  installation, notebook preparation, and Kaggle submission. It is polling
-  `Wait for Kaggle training to finish`.
-- The student model remains random-initialized; SmolLM3 is used only to
-  generate training text/preferences, not as student weights.
-- Do not start another scratch job or edit
-  `orbit/seed_model_v0.3_scratch/START_TRAINING.txt` while this is active.
-- Scratch DPO should only start after a successful v0.3 checkpoint release.
-  Earlier v0.2 DPO was skipped as part of this handoff.
+  reached a completed GitHub Actions job with overall conclusion **failure**.
+- Kaggle notebook: `dud12345/orbit-seed-v0-3-scratch-training`.
+- The job log reports `KernelWorkerStatus.COMPLETE` at 2026-11-04 01:44:55 UTC.
+- The workflow downloaded `pretraining_model.safetensors`, `tokenizer.model`, `training_report.json`, `pretraining_log.json`, train/validation token bins, and the tokenizer training corpus.
+- The next step copied `training_report.json` and `config.json` into the runner checkout and attempted to commit/push them. GitHub rejected the push with `fetch first` / `non-fast-forward` because `main` had newer commits. The report commit was not pushed.
+- The `Publish the scratch model release` step was skipped. A subsequent artifact listing returned no GitHub Actions artifacts. The report/config files were not present on `main` when fetched.
+- Therefore Kaggle execution and download of its outputs are confirmed, but a durable report in GitHub and a published release are **not** confirmed. Do not claim the release exists or quote training metrics until the Kaggle output is recovered and inspected.
+- The student model was configured for random initialization; SmolLM3 was intended as a text-data teacher only. Verify the actual downloaded report/config before making claims about the exact trained result.
+- No v0.3 DPO training run is confirmed because its prerequisite release was not published. Do not trigger DPO without recovering and validating the checkpoint first.
+- The user's observed chat samples were poor/incoherent: “By choosing the snow that is rain.”; “I've got a Discovery Worksheet?”; a longer desk response containing “introitulation”; and “To create a comprehensive sentence...” These samples have not been tied to a verified checkpoint hash or fixed decoding settings. Treat them as qualitative observations, not a controlled evaluation.
+
+Do not submit another Kaggle training job merely to fix the GitHub push. First determine whether the completed Kaggle output can be downloaded again, then recover the report/checkpoint without repeating training.
 
 ### One-off helper workflow
 
@@ -254,9 +250,9 @@ environment. It does not cancel sessions.
 
 ---
 
-## 6. Verified status snapshot — 2026-11-04
+## 6B. Historical verified status snapshot — 2026-11-04 (superseded)
 
-This section is a historical snapshot, not a promise that the state is still current. Always query GitHub Actions before continuing.
+This section records what was known before the v0.3 Kaggle run completed. It is retained for audit/history only; Section 6A above is the latest verified status. Always query GitHub Actions before continuing.
 
 ### v0.2 SFT
 
@@ -300,6 +296,9 @@ GitHub Actions workflow status alone can be misleading if one job is skipped. In
 - `README.md` — short human-facing project overview.
 - `README_FOR_AI.md` — this durable AI handoff document.
 
+### ORBIT Cognitive proposal
+- `orbit/cognitive/COGNITIVE_ARCHITECTURE.md` — proposed multi-network, neuro-symbolic cognitive architecture. Design document only; no implementation or training is claimed.
+
 ### v0.1
 - `orbit/seed_model/` — original small scratch model.
 
@@ -330,21 +329,15 @@ GitHub Actions workflow status alone can be misleading if one job is skipped. In
 
 When resuming work:
 
-1. Read this file first.
-2. Query the live GitHub Actions runs for `lm11-gif/ok`; specifically inspect v0.2 SFT run 41744997703 and any later v0.2 DPO/v0.3 runs.
-3. If SFT is still running, inspect its GitHub job steps and Kaggle notebook status/logs. Do not start another competing GPU job.
-4. If SFT succeeds, verify its release asset and training report. Then confirm that the v0.2 DPO job actually ran (not merely that a syntax-check job succeeded).
-5. Confirm v0.3 Scratch training is queued/started only after the intended dependency. Manual dispatch is available, but check GPU usage first.
-6. On v0.3 success, inspect:
-   - `from_scratch: true`
-   - `pretrained_student_weights: false`
-   - model parameter count and tokenizer size
-   - actual pretraining token count and validation-loss trend
-   - assistant-only SFT counts/loss
-   - generated sample answers
-   - presence and validity of `model.safetensors`, `pretraining_model.safetensors`, `optimizer_state.pt`, tokenizer, config, and report.
-7. Only after the v0.3 scratch release exists should its scratch DPO workflow run. Inspect whether its DPO job actually ran, the preference-pair count, training/held-out metrics, and SFT-vs-DPO sample answers.
-8. If a failure occurs, report the exact failing step and the actual traceback. Fix the cause and verify syntax before resubmitting. Avoid wasting Kaggle GPU quota on repeated unverified submissions.
+1. Read this file and `orbit/cognitive/COGNITIVE_ARCHITECTURE.md` first.
+2. Query live GitHub Actions and Kaggle output availability. Treat v0.2 as manually cancelled and v0.3 as Kaggle-completed but not released until current evidence says otherwise.
+3. Try to recover the existing v0.3 Kaggle output/report and checkpoint before considering another GPU run. The last GitHub job downloaded these files but failed only when pushing the report commit; do not waste GPU quota by blindly retraining.
+4. Inspect the recovered `training_report.json`, `config.json`, `pretraining_log.json`, and checkpoint set. Verify actual tokens/steps, validation trend, SFT stage counts/loss, exact parameter count, tokenizer size, and file integrity. Do not infer these from the Kaggle `COMPLETE` status alone.
+5. Do not run v0.3 DPO until the scratch checkpoint has been recovered, validated, and published through a durable release or other controlled artifact path.
+6. For the proposed Cognitive v1 direction, begin with a CPU-friendly typed fact store, provenance, working memory, and deterministic coordinator. Then add only two or three small specialist neural networks with measurable objectives. Do not immediately build a pile of six networks or start new Kaggle training.
+7. Build a held-out question set covering basic definitions, paraphrases, related concepts, multi-step questions, unknown facts, and contradictions. Track factual accuracy, evidence coverage, unsupported claims, abstention, latency, and memory use.
+8. Keep v0.3 as a separate baseline; do not delete it or silently combine its weights with the cognitive modules. Keep all design and implementation updates in GitHub.
+9. If a failure occurs, report the exact failing step and actual traceback. Fix it and verify before resubmitting. Avoid wasting Kaggle GPU quota on repeated unverified submissions.
 
 Do not silently replace the v0.3 random-init student with SmolLM2/SmolLM3 weights, or relabel v0.2 as scratch-trained. Keep model lineage and checkpoint/tokenizer pairing explicit in every release.
 
@@ -359,3 +352,16 @@ Do not silently replace the v0.3 random-init student with SmolLM2/SmolLM3 weight
 - Keep the release notices and data-source names/links in the training report.
 
 **Final principle:** ORBIT's goal is an independently trained student. Improve it through more genuine data, compute, evaluation, and carefully controlled teacher-generated text — not by quietly substituting a pretrained model.
+
+
+## 10. ORBIT Cognitive v1 direction
+
+The user is considering a different direction after observing incoherent v0.3 answers: several small neural networks working together as a modular cognitive system. The proposal is documented in `orbit/cognitive/COGNITIVE_ARCHITECTURE.md` and linked from the root `README.md`.
+
+Important design principles:
+- Use small specialist networks for distinct learned tasks, not several chatbots exchanging unstructured paragraphs.
+- Coordinate modules through a typed shared workspace and a deterministic controller.
+- Keep memory, provenance, rule application, task scheduling, and consistency checks inspectable in ordinary code at first.
+- Start with two or three neural modules (e.g. question encoder, association/retrieval model, then an evaluator), not a large collection.
+- Prefer template-based answer composition initially so reasoning/retrieval can be tested separately from fluent language generation.
+- Preserve ORBIT Seed v0.3 as a separate scratch-LM experiment/baseline. Cognitive v1 is a proposal, not implemented code yet.
