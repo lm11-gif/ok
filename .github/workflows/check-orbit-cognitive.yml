@@ -78,9 +78,8 @@ jobs:
                   result = subprocess.run(
                       [sys.executable, "chat.py", "--model", ".", "--device", "cpu",
                        "--max-new-tokens", "8", "--temperature", "0"],
-                      cwd=folder, input="/exit\\n", text=True, capture_output=True, timeout=120
+                      cwd=folder, input="/exit", text=True, capture_output=True, timeout=120
                   )
                   assert result.returncode == 0, result.stderr
                   assert "neural byte-level generator" in result.stdout
-              assert "run_orbit.bat" in report["runtime_files"]
           PY

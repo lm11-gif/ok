@@ -767,6 +767,7 @@ def main():
             "The 67-fact graph provides narrow factual grounding; the language model can still make unsupported statements.",
         ],
     }
+    (output / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
     packaged_sources = write_runtime_package(output)
     report["runtime_files"] = packaged_sources + ["README.txt", "run_orbit.bat"]
     (output / "training_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
