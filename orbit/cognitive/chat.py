@@ -258,7 +258,7 @@ class OrbitCognitive:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", default="artifacts/orbit-cognitive-v2")
+    parser.add_argument("--model", default="artifacts/orbit-cognitive-v2.1")
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--max-new-tokens", type=int, default=160)
     parser.add_argument("--temperature", type=float, default=0.72)
