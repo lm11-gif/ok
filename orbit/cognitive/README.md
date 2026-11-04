@@ -1,6 +1,6 @@
 # ORBIT Cognitive v1
 
-**Status: first implementation.** Three small specialist neural networks are randomly initialised and intended to be trained on a Kaggle GPU. This is an early, narrow prototype—not a general-purpose assistant or a literal brain.
+**Status: implemented and CI-tested; GPU training pending.** Three small specialist neural networks are randomly initialised and set up to train on a Kaggle GPU. This is an early, narrow prototype—not a general-purpose assistant or a literal brain.
 
 ## Architecture
 
@@ -17,7 +17,7 @@ The initial dataset is a small curated seed knowledge graph in core.py. Training
 
 ## GPU training
 
-Kaggle's GPU image supplies PyTorch. Normal training refuses to run on CPU.
+Kaggle's GPU image supplies PyTorch. The workflow bundles all three source modules and the trainer into a single self-contained script because Kaggle script kernels execute the designated entry-point file rather than automatically exposing adjacent Python modules. Normal training refuses to run on CPU.
 
     python -m pip install -r orbit/cognitive/requirements.txt
     python -m orbit.cognitive.train --device cuda --output artifacts/orbit-cognitive-v1
@@ -29,6 +29,9 @@ CPU smoke test for CI only:
 ### Speed techniques
 
 - Tokenise the small corpus once and keep tensors resident on the GPU to avoid repeated Python/DataLoader/host-to-device overhead.
+- Use a batch size of 256 to reduce per-step kernel-launch and optimiser overhead for these compact models.
+- Use a single self-contained Kaggle script to avoid multi-file packaging/import failures and extra setup work.
+- CI uses CPU-only PyTorch wheels because its tests are CPU-only; Kaggle uses its preinstalled CUDA PyTorch build.
 - Use CUDA FP16 autocast and GradScaler when enabled.
 - Use fused AdamW when the installed PyTorch/CUDA build supports it; automatically fall back otherwise.
 - Enable TF32 matmul on Ampere-or-newer GPUs only.
@@ -45,7 +48,7 @@ The Kaggle workflow records GPU model, VRAM, CUDA/PyTorch versions, timing, peak
 2. The workflow uses existing KAGGLE_API_TOKEN and KAGGLE_USERNAME repository secrets. Never put credentials in files.
 3. Download the Actions artifact named orbit-cognitive-v1-training-<run id>, or use the orbit-cognitive-v1 release after a successful run.
 
-Only one Kaggle GPU job should run at a time. Ordinary code and documentation pushes do not start GPU training.
+Only one Kaggle GPU job should run at a time; all ORBIT training workflows share a GitHub Actions concurrency lock. Ordinary code and documentation pushes do not start GPU training. The first submission was accepted by Kaggle but failed during script startup because adjacent module files were not importable. A self-contained bundler and canonical kernel-ID handling have been added; the corrected run has not yet been confirmed.
 
 ## Run the trained model
 
