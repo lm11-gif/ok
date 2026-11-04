@@ -75,22 +75,54 @@ Each network needs a clear training objective and held-out evaluation set. Do no
 
 Synthetic examples or teacher-written text may be used as training data, but record their origin and review samples. Do not copy teacher-model weights into any student network if the project is meant to preserve scratch-trained lineage.
 
-## 6. Keep the first prototype small
+## 6. Keep the first version small, but train it on a GPU
 
-The first milestone should be a CPU-friendly proof of concept, not a large collection of expensive models.
+ORBIT Cognitive is intended to be a GPU-trained neural system. CPU execution is useful for unit tests, data inspection, and possibly lightweight inference, but it is **not** the training target for the specialist networks.
 
-Suggested order:
+Start with three separately trained, randomly initialised specialists:
 
-1. Build the typed fact store, provenance records, working memory, and deterministic controller.
-2. Add one small input encoder and one small retriever/associator.
-3. Test a narrow set of factual questions with known answers.
-4. Add a reasoning-policy network only after the retrieval baseline works.
-5. Add the evaluator and measure whether it catches unsupported answers.
-6. Add a language composer last; begin with templates so answer quality is not confused with reasoning quality.
+1. **PerceptionNet:** a small text encoder that maps a question to a structured frame (intent, entities, relations, and constraints).
+2. **AssociationNet:** a small network that predicts relationships between concepts and proposes useful related concepts.
+3. **MemoryNet:** a small retrieval/ranking network that selects relevant records from the external fact store.
 
-Start with perhaps two or three small neural modules, not six independently trained models. Their size should be chosen after measuring CPU speed and memory use on the target machine. More modules increase integration and training complexity; they do not automatically increase intelligence.
+After these work reliably, add a **ControlNet** to select the next operation and an optional learned evaluator. The first evaluator can combine deterministic evidence checks with a small classifier. Do not build five or six networks before the first three demonstrate measurable value.
 
-## 7. Evaluation gates
+The neural specialists should exchange typed records using one shared concept vocabulary, relation schema, and identifier format. Do not have them communicate by generating free-form paragraphs. That would make their interfaces ambiguous and harder to train.
+
+Their exact widths and parameter counts should be selected after profiling on the actual Kaggle GPU assigned to the session. A modest combined model budget is preferable to arbitrary oversized networks. More modules increase coordination and training complexity; they do not automatically increase intelligence.
+
+## 7. GPU training plan
+
+**Training target:** Kaggle GPU sessions, using the repository's existing GitHub Actions-to-Kaggle approach where practical. The workflow must print and record the actual GPU model, CUDA/PyTorch versions, memory capacity, and whether CUDA is being used. Do not silently fall back to CPU training.
+
+All Cognitive v1 student networks should begin from random initialisation. Do not load pretrained model weights into them. Teacher-generated examples may be used as labelled text data if provenance is recorded, but teacher weights and hidden states must not be copied into the students.
+
+### Training stages
+
+1. **Build and validate datasets.** Create labelled examples for intent/entity/relation parsing, concept-link prediction, retrieval ranking, and operation selection. Keep train/validation/test splits separate by source or underlying fact so near-duplicate examples cannot leak across splits.
+2. **Train PerceptionNet on GPU.** Supervise structured parses from varied phrasings. Evaluate intent classification, entity extraction, and relation extraction separately.
+3. **Train AssociationNet on GPU.** Use positive and negative concept pairs or graph edges. Evaluate held-out link prediction with precision, recall, and calibration.
+4. **Train MemoryNet on GPU.** Use query-to-record relevance pairs and hard negatives. Evaluate Recall@k and ranking quality on held-out queries.
+5. **Integrate and jointly tune.** Connect the networks through the shared typed workspace. Train or fine-tune the controller with labelled operation traces, then optionally tune the modules together with a weighted task loss. Retain each specialist's individual validation metrics so joint training cannot hide a regression.
+6. **Package and evaluate.** Save every specialist checkpoint, shared schema/vocabulary, optimizer and scheduler state, random seeds, dataset fingerprints, metrics, and an integrated test report.
+
+### Compute and checkpoint requirements
+
+- Use the Kaggle GPU, and verify torch.cuda.is_available() before starting any training epoch. Log torch.cuda.get_device_name(0) and available memory.
+- Use mixed precision only when supported by the assigned GPU; keep a safe full-precision fallback for unsupported operations.
+- Use gradient accumulation and conservative batch sizes so the run fits the actual device.
+- Save resumable checkpoints regularly and after each specialist stage. A workflow failure during GitHub publishing must not destroy the only copy of trained weights.
+- Upload checkpoints and reports as workflow artifacts and/or a versioned release before attempting to update repository documentation. A failed README/report commit must not discard the model files.
+- Use one Kaggle GPU job at a time. Do not run separate specialist jobs concurrently unless there is a clear quota and hardware reason.
+- Do not start GPU training until the dataset generator, training script, validation script, and checkpoint recovery path have passed CPU-side tests.
+
+The first release should be judged on held-out task performance, not on the fact that it ran on a GPU. GPU acceleration makes training practical; it does not guarantee useful learning.
+
+## 8. Output generation
+
+Do not make a general-purpose language generator the first milestone. Start with constrained, fact-preserving response templates driven by the verified structured result. This lets us test whether the cognitive modules retrieve and reason correctly without confusing that with fluent writing. A small answer-generation network can be added later and trained on GPU once the evidence pipeline is dependable.
+
+## 9. Evaluation gates
 
 Use a fixed held-out test set, including questions with different wording and questions whose answers are intentionally absent from memory.
 
@@ -106,7 +138,7 @@ Minimum early tests:
 
 Track exact answer accuracy, evidence coverage, unsupported-claim rate, unknown-question abstention, latency, and memory use. Do not call the system intelligent just because it produces plausible sentences.
 
-## 8. Relationship to ORBIT Seed v0.3
+## 10. Relationship to ORBIT Seed v0.3
 
 Keep orbit/seed_model_v0.3_scratch/ as a separate scratch-trained language-model experiment and baseline. Do not delete or silently repurpose its checkpoint.
 
@@ -122,11 +154,11 @@ The user's sample outputs from ORBIT ("By choosing the snow that is rain", "I've
 
 Cognitive v1 should initially be developed independently of the v0.3 training pipeline. The v0.3 model could later be tested as an optional language-composition component, but its text-generation behaviour should not be allowed to invent or override facts in the structured memory.
 
-## 9. Immediate next steps
+## 11. Immediate next steps
 
 - Preserve v0.3 and recover/record its actual Kaggle training report if the Kaggle output is still accessible.
-- Create a small CPU prototype of the memory store, typed workspace, and controller.
-- Add a tiny scratch-trained encoder/retriever only when there is a labelled dataset and a measurable baseline.
+- Build and test the memory store, typed workspace, controller, dataset generator, and recovery path on CPU.
+- Then train the randomly initialised specialist networks on Kaggle GPU, one controlled run at a time, with held-out metrics and resumable checkpoints.
 - Test the system on a fixed question set before deciding whether to expand it.
 - Keep each experiment, dataset, checkpoint, and training lineage documented in GitHub.
 
