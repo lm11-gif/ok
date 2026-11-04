@@ -22,8 +22,24 @@ class CognitiveDataTests(unittest.TestCase):
         data = build_seed_data()
         for fact in data["facts"]:
             examples = [row for split in data["examples"].values()
-                        for row in split if row["fact_id"] == fact["id"]]
+                        for row in split if fact["id"] in row["fact_ids"]]
             self.assertEqual(len(examples), 10)
+
+    def test_memory_queries_group_all_valid_facts(self):
+        data = build_seed_data()
+        tree_id = data["entity_to_id"]["tree"]
+        needs_id = data["relation_to_id"]["needs"]
+        rows = [
+            row for row in data["examples"]["train"]
+            if row["subject_id"] == tree_id and row["relation_id"] == needs_id
+        ]
+        self.assertEqual(len(rows), 6)
+        expected = {
+            fact["id"] for fact in data["facts"]
+            if fact["subject_id"] == tree_id and fact["relation_id"] == needs_id
+        }
+        self.assertEqual(set(rows[0]["fact_ids"]), expected)
+        self.assertTrue(all(set(row["fact_ids"]) == expected for row in rows))
 
     def test_association_groups_allow_multiple_correct_objects(self):
         data = build_seed_data()
