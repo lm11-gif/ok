@@ -12,6 +12,9 @@ concurrency:
   cancel-in-progress: false
 jobs:
   train:
+    concurrency:
+      group: orbit-kaggle-gpu-shared
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 350
     env:
