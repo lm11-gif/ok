@@ -988,8 +988,10 @@ def _language_batch(
     batch_size: int,
     pad_id: int,
     device: torch.device,
+    assistant_only: bool = True,
 ):
-    """Sample windows containing at least one assistant target."""
+    """Sample document-local windows; choose assistant-only or full-transcript targets."""
+
     inputs = torch.full((batch_size, block_size), pad_id, dtype=torch.long, device=device)
     targets = torch.full_like(inputs, pad_id)
     loss_masks = torch.zeros((batch_size, block_size), dtype=torch.bool, device=device)
@@ -1016,7 +1018,10 @@ def _language_batch(
         if usable:
             inputs[row, :usable] = sample[:usable]
             targets[row, :usable] = sample[1:usable + 1]
-            loss_masks[row, :usable] = target_mask[start + 1:start + 1 + usable].to(device)
+            if assistant_only:
+                loss_masks[row, :usable] = target_mask[start + 1:start + 1 + usable].to(device)
+            else:
+                loss_masks[row, :usable] = targets[row, :usable].ne(pad_id)
     return inputs, targets, loss_masks
 
 
@@ -1084,6 +1089,7 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
     if args.smoke:
         steps_per_epoch = 3
     validation_batches = 2 if args.smoke else 30
+    transcript_warmup_epochs = 0 if args.smoke else max(2, min(5, epochs // 6))
     best_validation_loss = float("inf")
     best_state = None
     best_epoch = 0
@@ -1098,9 +1104,10 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
         model.train()
         running_loss = 0.0
         for _ in range(steps_per_epoch):
+            assistant_only = epoch >= transcript_warmup_epochs
             inputs, targets, loss_mask = _language_batch(
                 train_sequences, train_masks, config["block_size"], batch_size,
-                tokenizer.PAD_ID, device,
+                tokenizer.PAD_ID, device, assistant_only=assistant_only,
             )
             optimizer.zero_grad(set_to_none=True)
             with autocast_context(device, amp_enabled):
@@ -1132,7 +1139,8 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
         scheduler.step()
         print(
             f"ConversationalGenerator epoch {epoch + 1}/{epochs}: "
-            f"train_assistant_loss={train_loss:.4f} validation_assistant_loss={validation_loss:.4f} "
+            f"stage={'assistant_sft' if epoch >= transcript_warmup_epochs else 'transcript_lm'} "
+            f"train_loss={train_loss:.4f} validation_assistant_loss={validation_loss:.4f} "
             f"lr={optimizer.param_groups[0]['lr']:.6g}",
             flush=True,
         )
@@ -1206,6 +1214,7 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
         "validation_documents": len(validation_sequences),
         "training_tokens": train_token_count,
         "assistant_target_tokens": assistant_target_count,
+        "transcript_warmup_epochs": transcript_warmup_epochs,
         "validation_tokens": sum(int(x.numel()) for x in validation_sequences),
         "validation_assistant_target_tokens": sum(int(mask.sum().item()) for mask in validation_masks),
         "vocab_size": tokenizer.vocab_size,
@@ -1222,6 +1231,7 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
         "validation_documents": len(validation_sequences),
         "training_tokens": train_token_count,
         "assistant_target_tokens": assistant_target_count,
+        "transcript_warmup_epochs": transcript_warmup_epochs,
         "optimizer_fused": fused,
         "context_length_tokens": config["block_size"],
         "tokenizer_format": tokenizer.FORMAT,
@@ -1237,6 +1247,7 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
         "validation_documents": len(validation_sequences),
         "training_tokens": train_token_count,
         "assistant_target_tokens": assistant_target_count,
+        "transcript_warmup_epochs": transcript_warmup_epochs,
         "vocab_size": tokenizer.vocab_size,
         "steps_per_epoch": steps_per_epoch,
         "batch_size": batch_size,
