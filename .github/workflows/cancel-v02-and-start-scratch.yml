@@ -1,0 +1,125 @@
+name: Stop v0.2 training and start ORBIT v0.3 Scratch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/cancel-v02-and-start-scratch.yml"
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cancel-and-dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      KAGGLE_API_TOKEN: \${{ secrets.KAGGLE_API_TOKEN }}
+      KAGGLE_USERNAME: \${{ secrets.KAGGLE_USERNAME }}
+      GH_TOKEN: \${{ github.token }}
+
+    steps:
+      - name: Stop the active v0.2 GitHub polling workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run cancel 41744997703 --repo "$GITHUB_REPOSITORY" || true
+          echo "Cancellation requested for v0.2 GitHub run 41744997703."
+
+      - name: Install Kaggle CLI and verify account access
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "\${KAGGLE_API_TOKEN:-}" || -z "\${KAGGLE_USERNAME:-}" ]]; then
+            echo "::error::Kaggle credentials are missing."
+            exit 1
+          fi
+          python -m pip install --upgrade kaggle
+          kaggle --version
+          kaggle kernels list --mine --search "ORBIT Seed v0.2" --format json \
+            > "$RUNNER_TEMP/orbit-v02-kernels.json"
+
+      - name: Request cancellation of the active Kaggle session
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - "$RUNNER_TEMP/orbit-v02-kernels.json" <<'PY'
+          import json
+          import os
+          import sys
+          import time
+
+          from kaggle.api.kaggle_api_extended import KaggleApi
+          from kagglesdk.kernels.types.kernels_api_service import ApiCancelKernelSessionRequest
+
+          rows = json.load(open(sys.argv[1], encoding="utf-8"))
+          matches = [
+              row for row in rows
+              if row.get("title") == "ORBIT Seed v0.2 Fine-tuning"
+          ]
+          if len(matches) != 1:
+              raise SystemExit(
+                  "Expected one exact v0.2 notebook; found refs: "
+                  + repr([row.get("ref") for row in matches])
+              )
+
+          row = matches[0]
+          ref = row.get("ref")
+          version = (
+              row.get("currentVersionNumber")
+              or row.get("current_version_number")
+              or row.get("versionNumber")
+              or row.get("version_number")
+          )
+          if not ref or not isinstance(version, int) or version <= 0:
+              raise SystemExit(
+                  "Kaggle did not provide a valid canonical ref/current version: "
+                  + repr({"ref": ref, "keys": sorted(row.keys())})
+              )
+
+          print(f"Canonical Kaggle notebook: {ref}")
+          print(f"Active notebook version/session identifier reported by Kaggle: {version}")
+
+          api = KaggleApi()
+          api.authenticate()
+          request = ApiCancelKernelSessionRequest(kernel_session_id=version)
+          with api.build_kaggle_client() as client:
+              client.kernels.kernels_api_client.cancel_kernel_session(request)
+
+          print(f"Kaggle cancellation request submitted for session {version}.")
+          print(f"Notebook: https://www.kaggle.com/code/{ref}")
+          PY
+
+      - name: Verify Kaggle is no longer running v0.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          KERNEL_ID="dud12345/orbit-seed-v0-2-fine-tuning"
+          stopped=0
+          for attempt in $(seq 1 40); do
+            status="$(kaggle kernels status "$KERNEL_ID" 2>&1 || true)"
+            echo "$status"
+            if echo "$status" | grep -Eiq 'CANCEL_ACKNOWLEDGED|CANCEL_REQUESTED|COMPLETE|ERROR|cancelled|canceled|completed|error'; then
+              stopped=1
+              break
+            fi
+            sleep 15
+          done
+          if (( stopped == 0 )); then
+            echo "::error::Kaggle still appears to be running. Refusing to start a competing GPU job."
+            exit 1
+          fi
+
+      - name: Dispatch the genuine scratch training workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run train-orbit-v03-scratch.yml --ref main --repo "$GITHUB_REPOSITORY"
+          sleep 5
+          gh run list --repo "$GITHUB_REPOSITORY" \
+            --workflow train-orbit-v03-scratch.yml \
+            --branch main \
+            --limit 5 \
+            --json databaseId,status,conclusion,createdAt,url \
+            --jq '.[] | [.databaseId,.status,.conclusion,.createdAt,.url] | @tsv'
