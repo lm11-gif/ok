@@ -271,27 +271,38 @@ def build_seed_data() -> dict[str, Any]:
                     "fact_id": fact["id"],
                 })
 
-    # Group edges by subject/relation so a pair may have multiple valid objects
-    # (for example, a tree needs both water and sunlight). Split whole groups to
-    # prevent one object in a group leaking into train while another is held out.
+    # Group edges by subject/relation so a pair may have multiple valid objects.
     grouped: dict[tuple[int, int], set[int]] = {}
     for fact in facts:
         key = (fact["subject_id"], fact["relation_id"])
         grouped.setdefault(key, set()).add(fact["object_id"])
-    group_rows = [
-        {"subject_id": subject_id, "relation_id": relation_id,
-         "object_ids": sorted(object_ids)}
-        for (subject_id, relation_id), object_ids in grouped.items()
-    ]
+    by_relation: dict[int, list[dict[str, Any]]] = {}
+    for (subject_id, relation_id), object_ids in grouped.items():
+        by_relation.setdefault(relation_id, []).append({
+            "subject_id": subject_id,
+            "relation_id": relation_id,
+            "object_ids": sorted(object_ids),
+        })
+
+    # Stratify by relation and keep at least one training pair for each relation.
+    # A relation with only one subject/relation pair is train-only rather than
+    # being held out entirely, which would leave its embedding untrained.
     rng = np.random.default_rng(20261104)
-    group_order = rng.permutation(len(group_rows)).tolist()
-    n_train = max(1, int(len(group_rows) * 0.80))
-    n_val = max(1, int(len(group_rows) * 0.10))
-    assoc = {
-        "train": [group_rows[i] for i in group_order[:n_train]],
-        "validation": [group_rows[i] for i in group_order[n_train:n_train + n_val]],
-        "test": [group_rows[i] for i in group_order[n_train + n_val:]],
-    }
+    assoc = {"train": [], "validation": [], "test": []}
+    for relation_id in sorted(by_relation):
+        rows = by_relation[relation_id]
+        order = rng.permutation(len(rows)).tolist()
+        shuffled = [rows[i] for i in order]
+        if len(shuffled) == 1:
+            assoc["train"].extend(shuffled)
+            continue
+        n_train = max(1, int(len(shuffled) * 0.70))
+        remaining = len(shuffled) - n_train
+        n_val = max(1, int(remaining * 0.50)) if remaining >= 2 else 0
+        assoc["train"].extend(shuffled[:n_train])
+        if n_val:
+            assoc["validation"].extend(shuffled[n_train:n_train + n_val])
+        assoc["test"].extend(shuffled[n_train + n_val:])
     return {
         "facts": facts,
         "entities": entities,
