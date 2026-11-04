@@ -2,6 +2,9 @@ name: Train ORBIT Seed v0.3 Scratch on Kaggle GPU
 
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: ["Teacher-supervise ORBIT Seed v0.2 with DPO"]
+    types: [completed]
   push:
     branches: [main]
     paths:
@@ -16,6 +19,7 @@ concurrency:
 
 jobs:
   train:
+    if: ${{ github.event_name != 'workflow_run' || (github.event.workflow_run.event == 'workflow_run' && github.event.workflow_run.head_branch == 'main') }}
     runs-on: ubuntu-latest
     timeout-minutes: 350
     env:
