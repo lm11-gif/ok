@@ -427,9 +427,13 @@ def _missing(value: Any) -> bool:
     if value is None:
         return True
     try:
-        return bool(value != value)
+        import pandas as pd
+        return bool(pd.isna(value))
     except Exception:
-        return False
+        try:
+            return bool(value != value)
+        except Exception:
+            return False
 
 
 def _clean_external_text(value: Any) -> str:
@@ -560,13 +564,15 @@ def _load_oasst_dialogues(seed: int) -> tuple[list[str], list[str], list[dict[st
     for raw in rows:
         if str(raw.get("lang", "")).lower() != "en":
             continue
-        if bool(raw.get("deleted", False)) or bool(raw.get("synthetic", False)):
+        if (not _missing(raw.get("deleted")) and bool(raw.get("deleted"))) or (
+            not _missing(raw.get("synthetic")) and bool(raw.get("synthetic"))
+        ):
             continue
         if raw.get("review_result") is not None and not _missing(raw.get("review_result")):
             if not bool(raw.get("review_result")):
                 continue
         state = raw.get("tree_state")
-        if state and not _missing(state) and str(state) != "ready_for_export":
+        if not _missing(state) and str(state) != "ready_for_export":
             continue
         role = str(raw.get("role", ""))
         if role not in {"prompter", "assistant"}:
