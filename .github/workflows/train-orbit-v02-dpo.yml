@@ -1,0 +1,226 @@
+name: Teacher-supervise ORBIT Seed v0.2 with DPO
+
+on:
+  workflow_run:
+    workflows: ["Fine-tune ORBIT Seed v0.2 on Kaggle GPU"]
+    types: [completed]
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: orbit-v02-dpo-training
+  cancel-in-progress: false
+
+jobs:
+  dpo:
+    if: \${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      KAGGLE_API_TOKEN: \${{ secrets.KAGGLE_API_TOKEN }}
+      KAGGLE_USERNAME: \${{ secrets.KAGGLE_USERNAME }}
+      GH_TOKEN: \${{ github.token }}
+
+    steps:
+      - name: Check out the latest ORBIT repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Check DPO script syntax
+        run: python -m py_compile orbit/seed_model_v0.2/train_dpo.py
+
+      - name: Install Kaggle CLI
+        run: |
+          python -m pip install --upgrade kaggle
+          kaggle --version
+
+      - name: Verify the SFT release is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "\${KAGGLE_API_TOKEN:-}" || -z "\${KAGGLE_USERNAME:-}" ]]; then
+            echo "::error::Add KAGGLE_API_TOKEN and KAGGLE_USERNAME in repository Actions secrets."
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/orbit-sft-assets"
+          gh release download orbit-seed-v0.2 \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "orbit-seed-v0.2.zip" \
+            --dir "$RUNNER_TEMP/orbit-sft-assets"
+          test -s "$RUNNER_TEMP/orbit-sft-assets/orbit-seed-v0.2.zip"
+          ls -lh "$RUNNER_TEMP/orbit-sft-assets/orbit-seed-v0.2.zip"
+
+      - name: Prepare the Kaggle DPO kernel
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/orbit-v02-dpo-kernel"
+          cp orbit/seed_model_v0.2/train_dpo.py "$RUNNER_TEMP/orbit-v02-dpo-kernel/train_dpo.py"
+
+          kaggle kernels list --mine --search "ORBIT Seed v0.2 DPO Teacher Supervision" --format json \
+            > "$RUNNER_TEMP/orbit-dpo-kernels-before.json"
+          KERNEL_ID="$(python - "$RUNNER_TEMP/orbit-dpo-kernels-before.json" <<'PY'
+          import json
+          import sys
+          rows = json.load(open(sys.argv[1], encoding="utf-8"))
+          matches = [r for r in rows if r.get("title") == "ORBIT Seed v0.2 DPO Teacher Supervision"]
+          if len(matches) > 1:
+              raise SystemExit("Multiple matching DPO notebooks: " + repr([m.get("ref") for m in matches]))
+          if matches:
+              print(matches[0]["ref"])
+          PY
+          )"
+          if [[ -z "$KERNEL_ID" ]]; then
+            KERNEL_ID="$KAGGLE_USERNAME/orbit-seed-v0-2-dpo-teacher-supervision"
+          fi
+
+          export KERNEL_ID
+          python - "$RUNNER_TEMP/orbit-v02-dpo-kernel/kernel-metadata.json" <<'PY'
+          import json
+          import os
+          import sys
+          metadata = {
+              "id": os.environ["KERNEL_ID"],
+              "title": "ORBIT Seed v0.2 DPO Teacher Supervision",
+              "code_file": "train_dpo.py",
+              "language": "python",
+              "kernel_type": "script",
+              "is_private": "true",
+              "enable_gpu": "true",
+              "enable_internet": "true",
+              "machine_shape": "NvidiaTeslaT4",
+              "dataset_sources": [],
+              "competition_sources": [],
+              "kernel_sources": [],
+              "model_sources": []
+          }
+          with open(sys.argv[1], "w", encoding="utf-8") as f:
+              json.dump(metadata, f, indent=2)
+          PY
+          echo "Using initial Kaggle DPO notebook ref: $KERNEL_ID"
+          cat "$RUNNER_TEMP/orbit-v02-dpo-kernel/kernel-metadata.json"
+
+      - name: Submit the DPO job
+        shell: bash
+        run: |
+          set -euo pipefail
+          kaggle kernels push -p "$RUNNER_TEMP/orbit-v02-dpo-kernel" \
+            --timeout 43200 --accelerator NvidiaTeslaT4
+
+          kaggle kernels list --mine --search "ORBIT Seed v0.2 DPO Teacher Supervision" --format json \
+            > "$RUNNER_TEMP/orbit-dpo-kernels-after.json"
+          KERNEL_ID="$(python - "$RUNNER_TEMP/orbit-dpo-kernels-after.json" <<'PY'
+          import json
+          import sys
+          rows = json.load(open(sys.argv[1], encoding="utf-8"))
+          matches = [r for r in rows if r.get("title") == "ORBIT Seed v0.2 DPO Teacher Supervision"]
+          if len(matches) != 1:
+              raise SystemExit("Expected one DPO notebook after push; found: " + repr([m.get("ref") for m in matches]))
+          print(matches[0]["ref"])
+          PY
+          )"
+          echo "Kaggle confirmed DPO notebook ref: $KERNEL_ID"
+          echo "KERNEL_ID=$KERNEL_ID" >> "$GITHUB_ENV"
+
+      - name: Wait for teacher supervision and DPO
+        shell: bash
+        run: |
+          set -euo pipefail
+          completed=0
+          for attempt in $(seq 1 320); do
+            if ! status="$(kaggle kernels status "$KERNEL_ID" 2>&1)"; then
+              echo "$status"
+              echo "::error::Could not read Kaggle status using canonical ref '$KERNEL_ID'."
+              exit 1
+            fi
+            echo "$status"
+            if echo "$status" | grep -Eiq 'complete|completed|succeeded|finished'; then
+              completed=1
+              break
+            fi
+            if echo "$status" | grep -Eiq 'error|failed|cancelled|canceled'; then
+              echo "::error::Kaggle reported a DPO training failure."
+              kaggle kernels logs "$KERNEL_ID" || true
+              exit 1
+            fi
+            sleep 60
+          done
+          if (( completed == 0 )); then
+            echo "::error::Timed out waiting for the DPO notebook."
+            exit 1
+          fi
+
+      - name: Download and validate the DPO checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/orbit-v02-dpo-output" "$RUNNER_TEMP/orbit-v02-dpo-extracted"
+          kaggle kernels output "$KERNEL_ID" -p "$RUNNER_TEMP/orbit-v02-dpo-output" --force
+          ARCHIVE="$(find "$RUNNER_TEMP/orbit-v02-dpo-output" -type f -name 'orbit-seed-v0.2-dpo.zip' -print -quit)"
+          if [[ -z "$ARCHIVE" || ! -s "$ARCHIVE" ]]; then
+            echo "::error::DPO archive was not found in Kaggle output."
+            find "$RUNNER_TEMP/orbit-v02-dpo-output" -maxdepth 4 -type f -printf '%p (%s bytes)\n'
+            exit 1
+          fi
+          python -m zipfile -e "$ARCHIVE" "$RUNNER_TEMP/orbit-v02-dpo-extracted"
+          test -s "$RUNNER_TEMP/orbit-v02-dpo-extracted/dpo_training_report.json"
+          test -s "$RUNNER_TEMP/orbit-v02-dpo-extracted/config.json"
+          test -s "$RUNNER_TEMP/orbit-v02-dpo-extracted/tokenizer.json"
+          find "$RUNNER_TEMP/orbit-v02-dpo-extracted" -maxdepth 1 -name 'model*.safetensors' -size +1M | grep -q .
+          echo "ORBIT_DPO_ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+          echo "ORBIT_DPO_EXTRACTED=$RUNNER_TEMP/orbit-v02-dpo-extracted" >> "$GITHUB_ENV"
+          sha256sum "$ARCHIVE"
+
+      - name: Commit the DPO report
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "$ORBIT_DPO_EXTRACTED/dpo_training_report.json" orbit/seed_model_v0.2/dpo_training_report.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add orbit/seed_model_v0.2/dpo_training_report.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Record ORBIT Seed v0.2 DPO training results"
+            git push origin HEAD:main
+          fi
+
+      - name: Publish the DPO checkpoint release
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="orbit-seed-v0.2-dpo"
+          NOTES="$RUNNER_TEMP/orbit-v02-dpo-release-notes.md"
+          cat > "$NOTES" <<'EOF'
+          ORBIT Seed v0.2 DPO is a preference-tuned derivative of ORBIT Seed v0.2 SFT.
+          SmolLM3-3B generated and revised preference examples. The archive includes
+          the merged checkpoint, tokenizer, preference pairs, and training report.
+          Teacher-generated preferences can still contain errors; inspect the report
+          and preferences before relying on the model.
+          EOF
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ORBIT_DPO_ARCHIVE" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload "$TAG" "$ORBIT_DPO_EXTRACTED/dpo_training_report.json" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" "$ORBIT_DPO_ARCHIVE" "$ORBIT_DPO_EXTRACTED/dpo_training_report.json" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "ORBIT Seed v0.2 — DPO teacher-supervised" \
+              --notes-file "$NOTES" \
+              --target main
+          fi
+
+      - name: Publish DPO summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## ORBIT Seed v0.2 — DPO teacher supervision"
+            echo ""
+            echo "Kaggle notebook: $KERNEL_ID"
+            if [[ -f orbit/seed_model_v0.2/dpo_training_report.json ]]; then
+              echo ""
+              cat orbit/seed_model_v0.2/dpo_training_report.json
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
