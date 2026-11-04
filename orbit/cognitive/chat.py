@@ -63,7 +63,7 @@ class OrbitCognitive:
         normalised = self._normalise(question)
         return [
             idx for idx, entity in enumerate(self.entities)
-            if re.search(r"\\b" + re.escape(entity.replace("_", " ")) + r"\\b", normalised)
+            if re.search(r"\b" + re.escape(entity.replace("_", " ")) + r"\b", normalised)
         ]
 
     @torch.inference_mode()
@@ -86,7 +86,11 @@ class OrbitCognitive:
             return f"I recognise {self.entities[subject_id].replace('_', ' ')}, but I have no stored facts about it."
         scores = self.memory(x, self.fact_tokens)[0]
         relation_candidates = [i for i in candidate_ids if self.fact_relation_ids[i] == relation_id]
-        if relation_candidates and relation_conf >= 0.18:
+        if relation_conf >= 0.18 and not relation_candidates:
+            relation_name = self.relations[relation_id].replace("_", " ")
+            return (f"I recognise {self.entities[subject_id].replace('_', ' ')}, "
+                    f"but my current memory has no reliable fact about {relation_name}.")
+        if relation_candidates:
             candidate_ids = relation_candidates
         association_logits = self.association(
             torch.tensor([subject_id], device=self.device),
