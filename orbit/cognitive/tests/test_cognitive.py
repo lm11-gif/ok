@@ -3,6 +3,7 @@ import torch
 from orbit.cognitive.core import build_seed_data, encode_examples, encode_text
 from orbit.cognitive.models import PerceptionNet, AssociationNet, MemoryNet
 from orbit.cognitive.language import VocabularyTokenizer, NeuralLanguageGenerator
+from orbit.cognitive.train import assistant_target_mask, _masked_language_loss
 from orbit.cognitive.chat import entity_aliases, find_mentioned_entities, relation_hint, compose_is_a, canonical_relation_query
 
 class CognitiveDataTests(unittest.TestCase):
@@ -89,6 +90,42 @@ class CognitiveDataTests(unittest.TestCase):
         self.assertEqual(compose_is_a("car", "vehicle"), "car is a vehicle.")
         self.assertEqual(compose_is_a("computer", "electronic device"), "computer is an electronic device.")
         self.assertEqual(compose_is_a("desk", "furniture"), "desk is furniture.")
+
+
+    def test_assistant_target_mask_ignores_user_and_context_tokens(self):
+        text = (
+            "<|user|> Hello there. <|context|> No retrieved facts. "
+            "<|assistant|> I can help with that. <|user|> Another question. "
+            "<|context|> No retrieved facts. <|assistant|> Here is the answer. <|end|>"
+        )
+        tokenizer = VocabularyTokenizer.build([text] * 4, max_vocab=1024, min_frequency=2)
+        ids = tokenizer.encode(text)
+        mask = assistant_target_mask(ids, tokenizer)
+        user_id = tokenizer.token_id("<|user|>")
+        assistant_id = tokenizer.token_id("<|assistant|>")
+        context_id = tokenizer.token_id("<|context|>")
+        hello_id = tokenizer.token_id("Hello")
+        help_id = tokenizer.token_id("help")
+        user_positions = [i for i, value in enumerate(ids) if value == user_id]
+        assistant_positions = [i for i, value in enumerate(ids) if value == assistant_id]
+        context_positions = [i for i, value in enumerate(ids) if value == context_id]
+        self.assertEqual(len(user_positions), 2)
+        self.assertEqual(len(assistant_positions), 2)
+        self.assertFalse(bool(mask[ids.index(hello_id)]))
+        self.assertTrue(bool(mask[ids.index(help_id)]))
+        self.assertTrue(bool(mask[user_positions[1]]))
+        self.assertFalse(bool(mask[context_positions[0]]))
+        self.assertGreater(int(mask.sum()), 5)
+
+    def test_assistant_only_loss_is_finite(self):
+        logits = torch.randn(2, 5, 20, requires_grad=True)
+        targets = torch.randint(0, 20, (2, 5))
+        mask = torch.zeros((2, 5), dtype=torch.bool)
+        mask[:, 2:] = True
+        loss = _masked_language_loss(logits, targets, mask, pad_id=0)
+        self.assertTrue(torch.isfinite(loss))
+        loss.backward()
+        self.assertIsNotNone(logits.grad)
 
     def test_neural_module_shapes(self):
         data = build_seed_data()
