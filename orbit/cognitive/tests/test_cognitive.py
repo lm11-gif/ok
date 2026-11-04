@@ -3,7 +3,7 @@ import torch
 from orbit.cognitive.core import build_seed_data, encode_examples, encode_text
 from orbit.cognitive.models import PerceptionNet, AssociationNet, MemoryNet
 from orbit.cognitive.language import VocabularyTokenizer, NeuralLanguageGenerator
-from orbit.cognitive.train import assistant_target_mask, _language_batch, _masked_language_loss
+from orbit.cognitive.train import assistant_target_mask, _format_daily_dialogue, _language_batch, _masked_language_loss
 from orbit.cognitive.chat import entity_aliases, find_mentioned_entities, relation_hint, compose_is_a, canonical_relation_query
 
 class CognitiveDataTests(unittest.TestCase):
@@ -91,6 +91,37 @@ class CognitiveDataTests(unittest.TestCase):
         self.assertEqual(compose_is_a("computer", "electronic device"), "computer is an electronic device.")
         self.assertEqual(compose_is_a("desk", "furniture"), "desk is furniture.")
 
+
+    def test_daily_dialogue_formatter_preserves_alternating_multi_turn_history(self):
+        row = {
+            "turns": [
+                {"speaker": "A", "text": "I want to learn programming."},
+                {"speaker": "B", "text": "What would you like to build?"},
+                {"speaker": "A", "text": "A small puzzle game."},
+                {"speaker": "B", "text": "Start with one simple puzzle mechanic."},
+            ]
+        }
+        formatted = _format_daily_dialogue(row)
+        self.assertIsNotNone(formatted)
+        document, messages = formatted
+        self.assertEqual([item["role"] for item in messages],
+                         ["user", "assistant", "user", "assistant"])
+        self.assertIn("<|user|> I want to learn programming.", document)
+        self.assertIn("<|assistant|> What would you like to build?", document)
+        self.assertIn("<|user|> A small puzzle game.", document)
+        self.assertIn("<|assistant|> Start with one simple puzzle mechanic.", document)
+        self.assertTrue(document.endswith("<|end|>"))
+
+    def test_daily_dialogue_formatter_rejects_broken_turn_order(self):
+        row = {
+            "turns": [
+                {"speaker": "A", "text": "Hello."},
+                {"speaker": "A", "text": "I have another thought."},
+                {"speaker": "B", "text": "Go ahead."},
+                {"speaker": "A", "text": "Thanks."},
+            ]
+        }
+        self.assertIsNone(_format_daily_dialogue(row))
 
     def test_assistant_target_mask_ignores_user_and_context_tokens(self):
         text = (
