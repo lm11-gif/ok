@@ -151,20 +151,34 @@ def run_perception(data, device, out_dir, args, amp_enabled):
 
 def run_association(data, device, out_dir, args, amp_enabled):
     splits = data["association_splits"]
-    def ids(rows):
-        s = torch.tensor([x["subject_id"] for x in rows], dtype=torch.long, device=device)
-        r = torch.tensor([x["relation_id"] for x in rows], dtype=torch.long, device=device)
-        o = torch.tensor([x["object_id"] for x in rows], dtype=torch.long, device=device)
-        return s, r, o
-    train_s, train_r, train_o = ids(splits["train"])
-    val_s, val_r, val_o = ids(splits["validation"])
-    test_s, test_r, test_o = ids(splits["test"])
-    model = AssociationNet(len(data["entities"]), len(data["relations"]), args.dim).to(device)
+    num_entities = len(data["entities"])
+
+    def pack(rows):
+        subjects = torch.tensor([row["subject_id"] for row in rows], dtype=torch.long, device=device)
+        relations = torch.tensor([row["relation_id"] for row in rows], dtype=torch.long, device=device)
+        targets = torch.zeros((len(rows), num_entities), dtype=torch.float32, device=device)
+        for row_index, row in enumerate(rows):
+            targets[row_index, row["object_ids"]] = 1.0
+        return subjects, relations, targets
+
+    train_s, train_r, train_targets = pack(splits["train"])
+    val_s, val_r, val_targets = pack(splits["validation"])
+    test_s, test_r, test_targets = pack(splits["test"])
+    model = AssociationNet(num_entities, len(data["relations"]), args.dim).to(device)
     optimizer, fused = make_optimizer(model.parameters(), args.learning_rate * 0.8, device)
     scaler = new_scaler(device, amp_enabled)
     best_score, best_state, best_epoch = -1.0, None, 0
     epochs = 1 if args.smoke else args.epochs_association
     start = time.perf_counter()
+
+    def group_metrics(logits, target_matrix):
+        top1 = logits.argmax(dim=-1, keepdim=True)
+        hit1 = target_matrix.gather(1, top1).squeeze(1).gt(0).float().mean().item()
+        k = min(5, logits.shape[-1])
+        topk = logits.topk(k, dim=-1).indices
+        hitk = target_matrix.gather(1, topk).gt(0).any(dim=1).float().mean().item()
+        return {"top1_hit_rate": float(hit1), "top5_recall": float(hitk)}
+
     for epoch in range(epochs):
         model.train()
         order = torch.randperm(train_s.shape[0], device=device)
@@ -172,14 +186,18 @@ def run_association(data, device, out_dir, args, amp_enabled):
             optimizer.zero_grad(set_to_none=True)
             with autocast_context(device, amp_enabled):
                 logits = model(train_s[batch_ids], train_r[batch_ids])
-                loss = F.cross_entropy(logits, train_o[batch_ids])
+                targets = train_targets[batch_ids]
+                log_probs = F.log_softmax(logits.float(), dim=-1)
+                per_group_loss = -(log_probs * targets).sum(dim=-1) / targets.sum(dim=-1).clamp_min(1.0)
+                loss = per_group_loss.mean()
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
         model.eval()
         with torch.no_grad(), autocast_context(device, amp_enabled):
             val_logits = model(val_s, val_r)
-            score = accuracy(val_logits, val_o)
+            metrics = group_metrics(val_logits, val_targets)
+            score = metrics["top1_hit_rate"]
         if score > best_score:
             best_score, best_epoch = score, epoch + 1
             best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
@@ -190,21 +208,18 @@ def run_association(data, device, out_dir, args, amp_enabled):
     model.eval()
     with torch.no_grad(), autocast_context(device, amp_enabled):
         test_logits = model(test_s, test_r)
-        test_metrics = {"object_top1_accuracy": accuracy(test_logits, test_o)}
-        k = min(5, test_logits.shape[-1])
-        test_metrics["object_top5_recall"] = float(
-            (test_logits.topk(k, dim=-1).indices == test_o.unsqueeze(1)).any(dim=1).float().mean().item()
-        )
+        test_metrics = group_metrics(test_logits, test_targets)
     elapsed = time.perf_counter() - start
     save_checkpoint(out_dir / "association.pt", model, {
         "name": "AssociationNet", "random_initialisation": True,
-        "validation_object_accuracy": best_score, "best_epoch": best_epoch,
+        "validation_top1_hit_rate": best_score, "best_epoch": best_epoch,
         "test_metrics": test_metrics,
+        "multi_positive_objective": "mean negative log probability across all valid objects per subject/relation",
     })
     return {
-        "validation_object_accuracy": best_score, "best_epoch": best_epoch,
+        "validation_top1_hit_rate": best_score, "best_epoch": best_epoch,
         "test": test_metrics, "seconds": elapsed, "fused_adamw": fused,
-        "train_edges": int(train_s.shape[0]),
+        "train_subject_relation_groups": int(train_s.shape[0]),
     }
 
 
