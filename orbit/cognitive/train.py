@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import os
+import urllib.request
 from contextlib import nullcontext
 import random
 import re
@@ -36,7 +38,7 @@ except ImportError:  # Kaggle script mode: modules are side-by-side.
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", choices=("cuda", "cpu", "auto"), default="cuda")
-    parser.add_argument("--output", default="artifacts/orbit-cognitive-v2.1")
+    parser.add_argument("--output", default="artifacts/orbit-cognitive-v2.2")
     parser.add_argument("--epochs-perception", type=int, default=35)
     parser.add_argument("--epochs-association", type=int, default=250)
     parser.add_argument("--epochs-memory", type=int, default=50)
@@ -44,14 +46,14 @@ def parse_args():
     parser.add_argument("--dim", type=int, default=96)
     parser.add_argument("--learning-rate", type=float, default=0.002)
     parser.add_argument("--seed", type=int, default=20261104)
-    parser.add_argument("--generator-epochs", type=int, default=40)
-    parser.add_argument("--generator-batch-size", type=int, default=32)
+    parser.add_argument("--generator-epochs", type=int, default=30)
+    parser.add_argument("--generator-batch-size", type=int, default=16)
     parser.add_argument("--generator-vocab-size", type=int, default=8192)
-    parser.add_argument("--generator-dim", type=int, default=192)
-    parser.add_argument("--generator-layers", type=int, default=6)
-    parser.add_argument("--generator-heads", type=int, default=6)
-    parser.add_argument("--generator-block-size", type=int, default=256)
-    parser.add_argument("--generator-learning-rate", type=float, default=0.0006)
+    parser.add_argument("--generator-dim", type=int, default=256)
+    parser.add_argument("--generator-layers", type=int, default=8)
+    parser.add_argument("--generator-heads", type=int, default=8)
+    parser.add_argument("--generator-block-size", type=int, default=512)
+    parser.add_argument("--generator-learning-rate", type=float, default=0.00035)
     parser.add_argument("--smoke", action="store_true", help="One short epoch per model for CI.")
     parser.add_argument("--no-amp", action="store_true", help="Disable CUDA mixed precision.")
     return parser.parse_args()
@@ -349,9 +351,11 @@ def run_memory(data, device, out_dir, args, amp_enabled):
 
 
 LANGUAGE_SYSTEM_PROMPT = (
-    "You are ORBIT, an experimental AI assistant. Respond naturally and directly. "
-    "Use retrieved memory facts as evidence, but do not claim that memory is complete. "
-    "When evidence is missing, be honest rather than inventing a factual answer."
+    "You are ORBIT, a helpful conversational assistant. Speak naturally and clearly. "
+    "Answer the latest message directly, use earlier conversation turns to maintain context, "
+    "and avoid repeating yourself. Keep a friendly, concise tone. "
+    "Use retrieved memory facts as evidence, but do not claim memory is complete. "
+    "When you are unsure, say so instead of inventing details."
 )
 
 
@@ -371,153 +375,346 @@ def load_base_language_corpus() -> str:
     return corpus_path.read_text(encoding="utf-8")
 
 
-def _natural_fact_answer(group: list[dict[str, Any]]) -> str:
-    subject = group[0]["subject"].replace("_", " ")
-    relation = group[0]["relation"]
-    objects = [fact["object"].replace("_", " ") for fact in group]
-    obj = objects[0] if len(objects) == 1 else ", ".join(objects[:-1]) + " and " + objects[-1]
-    if relation == "is_a":
-        if obj in {"precipitation", "furniture", "water", "oxygen", "computation", "transportation"}:
-            return f"{subject} is {obj}."
-        article = "an" if obj[:1].lower() in "aeiou" else "a"
-        return f"{subject} is {article} {obj}."
-    forms = {
-        "made_of": f"{subject} is made of {obj}.",
-        "falls_from": f"{subject} falls from {obj}.",
-        "located_in": f"{subject} is found in {obj}.",
-        "produces": f"{subject} produces {obj}.",
-        "used_for": f"{subject} is used for {obj}.",
-        "powered_by": f"{subject} is powered by {obj}.",
-        "contains": f"{subject} contains {obj}.",
-        "performs": f"{subject} performs {obj}.",
-        "part_of": f"{subject} is part of {obj}.",
-        "stores": f"{subject} stores {obj}.",
-        "needs": f"{subject} needs {obj}.",
-        "absorbs": f"{subject} absorbs {obj}.",
-        "orbits": f"{subject} orbits {obj}.",
-        "causes": f"{subject} can cause {obj}.",
-        "flows_into": f"{subject} flows into {obj}.",
-        "has_property": f"One property of {subject} is {obj}.",
-        "connects": f"{subject} connects {obj}.",
-    }
-    return forms.get(relation, f"{subject} is related to {obj}.")
+
+PUBLIC_DATASET_SOURCES = [
+    {
+        "name": "OpenAssistant/oasst1",
+        "revision": "fdf72ae0827c1cda404aff25b6603abec9e3399b",
+        "license": "Apache-2.0",
+        "url": "https://huggingface.co/datasets/OpenAssistant/oasst1",
+        "description": "English-only, review-approved human-written assistant conversation trees.",
+    },
+    {
+        "name": "3nesdeniz/english-daily-dialogues-10k",
+        "revision": "97e96d244d20c8970ac5be707cb89e5f94253357",
+        "license": "CC-BY-4.0",
+        "url": "https://huggingface.co/datasets/3nesdeniz/english-daily-dialogues-10k",
+        "description": "Synthetic multi-turn English daily-life dialogues, split by scenario.",
+    },
+]
 
 
-def build_language_documents(data: dict[str, Any], seed: int) -> list[str]:
-    """Build complete prompt/answer documents with one consistent chat format."""
-    base_text = load_base_language_corpus()
-    documents: list[str] = []
-    for chunk in base_text.split("\n\n"):
-        chunk = chunk.strip()
-        if not chunk:
-            continue
-        chunk = chunk.replace(
-            "\n<|assistant|>",
-            "\n<|context|>No verified memory facts were retrieved.\n<|assistant|>",
-        )
-        documents.append(f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\n{chunk}\n<|end|>")
+def _download_parquet_rows(url: str, label: str) -> tuple[list[dict[str, Any]], str, int]:
+    """Download a pinned public Parquet split and return its rows and checksum."""
+    try:
+        import pandas as pd
+    except ImportError as exc:
+        raise RuntimeError(
+            "Public dialogue training requires pandas and pyarrow in the Kaggle image."
+        ) from exc
 
-    grouped: dict[tuple[int, int], list[dict[str, Any]]] = {}
-    for fact in data["facts"]:
-        grouped.setdefault((fact["subject_id"], fact["relation_id"]), []).append(fact)
-    for group in grouped.values():
-        subject = group[0]["subject"].replace("_", " ")
-        relation = group[0]["relation"]
-        context = "; ".join(
-            f"{fact['subject'].replace('_', ' ')} {fact['relation'].replace('_', ' ')} "
-            f"{fact['object'].replace('_', ' ')}" for fact in group
-        )
-        answer = _natural_fact_answer(group)
-        for template in QUESTION_TEMPLATES[relation]:
-            documents.append(
-                f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\n"
-                f"<|user|> {template.format(s=subject)}\n"
-                f"<|context|> {context}\n"
-                f"<|assistant|> {answer}\n<|end|>"
+    last_error = None
+    for attempt in range(3):
+        try:
+            request = urllib.request.Request(
+                url, headers={"User-Agent": "ORBIT-Cognitive/2.2 (training data loader)"}
             )
-    documents.extend([
-        f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\n"
-        "<|user|> What is a flibbertigibbet?\n"
-        "<|context|> No verified memory facts were retrieved.\n"
-        "<|assistant|> I do not have enough information about that term to give a reliable definition.\n<|end|>",
-        f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\n"
-        "<|user|> Can you answer every possible question?\n"
-        "<|context|> No verified memory facts were retrieved.\n"
-        "<|assistant|> No. I have limited knowledge and can make mistakes. I should say when I am unsure instead of presenting a guess as a fact.\n<|end|>",
-    ])
-    random.Random(seed).shuffle(documents)
-    return documents
+            with urllib.request.urlopen(request, timeout=180) as response:
+                payload = response.read()
+            frame = pd.read_parquet(io.BytesIO(payload))
+            return frame.to_dict(orient="records"), hashlib.sha256(payload).hexdigest(), len(payload)
+        except Exception as exc:
+            last_error = exc
+            print(
+                f"Dataset download/read attempt {attempt + 1}/3 failed for {label}: {exc}",
+                flush=True,
+            )
+            time.sleep(3 * (attempt + 1))
+    raise RuntimeError(f"Could not load public dialogue split {label}: {last_error}") from last_error
 
 
-def _language_batch(sequences: list[torch.Tensor], block_size: int,
-                    batch_size: int, pad_id: int, device: torch.device):
-    """Sample each training example from one document; never join conversations."""
-    inputs = torch.full(
-        (batch_size, block_size), pad_id, dtype=torch.long, device=device
+def _missing(value: Any) -> bool:
+    if value is None:
+        return True
+    try:
+        return bool(value != value)
+    except Exception:
+        return False
+
+
+def _clean_external_text(value: Any) -> str:
+    text = str(value or "").replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"<\|[^>]*\|>", " ", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\b([A-Za-z]+)(\s+\1\b)+", r"\1", text, flags=re.IGNORECASE)
+    return "\n".join(line.strip() for line in text.splitlines() if line.strip()).strip()
+
+
+def _format_chat_messages(messages: list[dict[str, str]], include_end: bool = True) -> str:
+    parts = [f"<|system|>{LANGUAGE_SYSTEM_PROMPT}"]
+    for message in messages:
+        role = message["role"]
+        text = _clean_external_text(message["text"])
+        if not text:
+            continue
+        if role in {"user", "prompter"}:
+            parts.append(
+                f"<|user|> {text}\n<|context|> No verified memory facts were retrieved."
+            )
+        elif role == "assistant":
+            parts.append(f"<|assistant|> {text}")
+    if include_end:
+        parts.append("<|end|>")
+    return "\n".join(parts)
+
+
+def _format_daily_dialogue(row: dict[str, Any]) -> tuple[str, list[dict[str, str]]] | None:
+    turns = row.get("turns")
+    if not isinstance(turns, (list, tuple)) or len(turns) < 4:
+        return None
+    first_speaker = str(turns[0].get("speaker", "A"))
+    messages: list[dict[str, str]] = []
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        text = _clean_external_text(turn.get("text", ""))
+        if not text:
+            continue
+        role = "user" if str(turn.get("speaker", first_speaker)) == first_speaker else "assistant"
+        messages.append({"role": role, "text": text})
+    if len(messages) < 4 or messages[0]["role"] != "user":
+        return None
+    if any(messages[i]["role"] == messages[i - 1]["role"] for i in range(1, len(messages))):
+        return None
+    return _format_chat_messages(messages), messages
+
+
+def _load_daily_dialogues(seed: int) -> tuple[list[str], list[str], list[dict[str, Any]], dict[str, Any]]:
+    base = (
+        "https://huggingface.co/datasets/3nesdeniz/english-daily-dialogues-10k/"
+        "resolve/97e96d244d20c8970ac5be707cb89e5f94253357/data/"
     )
-    targets = torch.full_like(inputs, pad_id)
-    for row in range(batch_size):
-        sequence = sequences[random.randrange(len(sequences))]
-        max_start = max(0, int(sequence.numel()) - block_size - 1)
-        start = random.randint(0, max_start)
-        sample = sequence[start:start + block_size + 1]
-        usable = max(0, min(block_size, int(sample.numel()) - 1))
-        if usable:
-            inputs[row, :usable] = sample[:usable]
-            targets[row, :usable] = sample[1:usable + 1]
-    return inputs, targets
+    loaded: dict[str, list[dict[str, Any]]] = {}
+    hashes: dict[str, str] = {}
+    byte_counts: dict[str, int] = {}
+    for split in ("train", "validation", "test"):
+        rows, digest, byte_count = _download_parquet_rows(
+            base + f"{split}.parquet", f"English Daily Dialogues 10K/{split}"
+        )
+        loaded[split], hashes[split], byte_counts[split] = rows, digest, byte_count
+
+    excluded_domains = {"health_and_wellness", "shopping_and_errands"}
+    split_docs: dict[str, list[str]] = {name: [] for name in loaded}
+    eval_examples: list[dict[str, Any]] = []
+    for split, rows in loaded.items():
+        for row in rows:
+            if str(row.get("domain", "")) in excluded_domains:
+                continue
+            formatted = _format_daily_dialogue(row)
+            if formatted is None:
+                continue
+            document, messages = formatted
+            split_docs[split].append(document)
+            if split == "test":
+                assistant_indices = [
+                    i for i, message in enumerate(messages) if message["role"] == "assistant"
+                ]
+                if not assistant_indices:
+                    continue
+                target_index = assistant_indices[-1]
+                prefix = messages[:target_index]
+                if not prefix or prefix[-1]["role"] != "user":
+                    continue
+                eval_examples.append({
+                    "dataset": "English Daily Dialogues 10K test",
+                    "prompt": prefix[-1]["text"],
+                    "reference": messages[target_index]["text"],
+                    "history": prefix[:-1],
+                    "formatted_prompt": _format_chat_messages(prefix, include_end=False)
+                    + "\n<|assistant|>",
+                })
+
+    rng = random.Random(seed)
+    rng.shuffle(split_docs["train"])
+    rng.shuffle(split_docs["validation"])
+    rng.shuffle(eval_examples)
+    metadata = {
+        "name": "English Daily Dialogues 10K",
+        "url": "https://huggingface.co/datasets/3nesdeniz/english-daily-dialogues-10k",
+        "revision": "97e96d244d20c8970ac5be707cb89e5f94253357",
+        "license": "CC-BY-4.0",
+        "raw_rows": {key: len(value) for key, value in loaded.items()},
+        "usable_documents": {key: len(value) for key, value in split_docs.items()},
+        "sha256": hashes,
+        "download_bytes": byte_counts,
+        "excluded_domains": sorted(excluded_domains),
+    }
+    return split_docs["train"], split_docs["validation"], eval_examples, metadata
 
 
-def _language_quality_stats(samples: list[dict[str, str]]) -> dict[str, Any]:
-    """Report transparent generation diagnostics, not a claim of human fluency."""
+def _load_oasst_dialogues(seed: int) -> tuple[list[str], list[str], list[dict[str, Any]], dict[str, Any]]:
+    base = (
+        "https://huggingface.co/datasets/OpenAssistant/oasst1/resolve/"
+        "fdf72ae0827c1cda404aff25b6603abec9e3399b/data/"
+    )
+    train_rows, train_hash, train_bytes = _download_parquet_rows(
+        base + "train-00000-of-00001-b42a775f407cee45.parquet", "OpenAssistant OASST1/train"
+    )
+    validation_rows, validation_hash, validation_bytes = _download_parquet_rows(
+        base + "validation-00000-of-00001-134b8fd0c89408b6.parquet",
+        "OpenAssistant OASST1/validation",
+    )
+    rows = train_rows + validation_rows
+    by_id: dict[str, dict[str, Any]] = {}
+    accepted = 0
+    for raw in rows:
+        if str(raw.get("lang", "")).lower() != "en":
+            continue
+        if bool(raw.get("deleted", False)) or bool(raw.get("synthetic", False)):
+            continue
+        if raw.get("review_result") is not None and not _missing(raw.get("review_result")):
+            if not bool(raw.get("review_result")):
+                continue
+        state = raw.get("tree_state")
+        if state and not _missing(state) and str(state) != "ready_for_export":
+            continue
+        role = str(raw.get("role", ""))
+        if role not in {"prompter", "assistant"}:
+            continue
+        text = _clean_external_text(raw.get("text", ""))
+        if len(text) < 2 or len(text) > 4000:
+            continue
+        tree_id = raw.get("message_tree_id")
+        message_id = raw.get("message_id")
+        if _missing(tree_id) or _missing(message_id):
+            continue
+        item = dict(raw)
+        item["text"] = text
+        item["message_id"] = str(message_id)
+        item["parent_id"] = None if _missing(raw.get("parent_id")) else str(raw.get("parent_id"))
+        item["message_tree_id"] = str(tree_id)
+        by_id[item["message_id"]] = item
+        accepted += 1
+
+    # Reconstruct one supervised example for every accepted assistant message.
+    # Each example contains its real ancestor turns, not an isolated prompt/answer pair.
+    tree_examples: dict[str, list[dict[str, Any]]] = {}
+    for row in by_id.values():
+        if row["role"] != "assistant":
+            continue
+        chain: list[dict[str, Any]] = []
+        current: dict[str, Any] | None = row
+        visited: set[str] = set()
+        while current is not None and current["message_id"] not in visited and len(chain) < 12:
+            visited.add(current["message_id"])
+            chain.append(current)
+            parent_id = current.get("parent_id")
+            current = by_id.get(parent_id) if parent_id else None
+        chain.reverse()
+        while chain and chain[0]["role"] != "prompter":
+            chain.pop(0)
+        if len(chain) < 2 or chain[-1]["role"] != "assistant":
+            continue
+        chain = chain[-12:]
+        if chain[0]["role"] != "prompter":
+            continue
+        if any(chain[i]["role"] == chain[i - 1]["role"] for i in range(1, len(chain))):
+            continue
+        messages = [
+            {"role": "user" if item["role"] == "prompter" else "assistant", "text": item["text"]}
+            for item in chain
+        ]
+        document = _format_chat_messages(messages)
+        prefix = messages[:-1]
+        if not prefix or prefix[-1]["role"] != "user":
+            continue
+        tree_id = row["message_tree_id"]
+        tree_examples.setdefault(tree_id, []).append({
+            "document": document,
+            "dataset": "OpenAssistant OASST1",
+            "prompt": prefix[-1]["text"],
+            "reference": messages[-1]["text"],
+            "history": prefix[:-1],
+            "formatted_prompt": _format_chat_messages(prefix, include_end=False) + "\n<|assistant|>",
+        })
+
+    tree_ids = list(tree_examples)
+    random.Random(seed).shuffle(tree_ids)
+    validation_tree_count = max(1, int(len(tree_ids) * 0.05))
+    validation_tree_ids = set(tree_ids[:validation_tree_count])
+    train_documents: list[str] = []
+    validation_documents: list[str] = []
+    validation_examples: list[dict[str, Any]] = []
+    for tree_id, examples in tree_examples.items():
+        if tree_id in validation_tree_ids:
+            validation_documents.extend(example["document"] for example in examples)
+            validation_examples.extend(examples)
+        else:
+            train_documents.extend(example["document"] for example in examples)
+    random.Random(seed + 31).shuffle(train_documents)
+    random.Random(seed + 37).shuffle(validation_documents)
+    random.Random(seed + 41).shuffle(validation_examples)
+    metadata = {
+        "name": "OpenAssistant OASST1",
+        "url": "https://huggingface.co/datasets/OpenAssistant/oasst1",
+        "revision": "fdf72ae0827c1cda404aff25b6603abec9e3399b",
+        "license": "Apache-2.0",
+        "raw_rows": {"train": len(train_rows), "validation": len(validation_rows)},
+        "accepted_english_messages": accepted,
+        "conversation_trees": len(tree_ids),
+        "assistant_training_documents": {
+            "train": len(train_documents), "validation": len(validation_documents)
+        },
+        "sha256": {"train": train_hash, "validation": validation_hash},
+        "download_bytes": {"train": train_bytes, "validation": validation_bytes},
+        "split_method": "conversation-tree-held-out; all assistant turns use reconstructed ancestor history",
+    }
+    return train_documents, validation_documents, validation_examples, metadata
+
+
+def _build_language_quality_stats(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    """Keep real held-out reference replies beside generated replies for manual review."""
     reports = []
     for sample in samples:
         answer = sample["answer"]
         words = re.findall(r"[A-Za-z]+(?:['’][A-Za-z]+)?", answer.lower())
         ngrams = [tuple(words[i:i + 4]) for i in range(max(0, len(words) - 3))]
-        repeated = len(ngrams) - len(set(ngrams))
-        reports.append({
+        row = {
+            "dataset": sample.get("dataset", "authored prompt"),
             "prompt": sample["prompt"],
             "answer": answer,
             "word_count": len(words),
             "unique_word_ratio": round(len(set(words)) / max(1, len(words)), 3),
-            "repeated_fourgram_count": repeated,
+            "repeated_fourgram_count": len(ngrams) - len(set(ngrams)),
             "replacement_character_count": answer.count("�"),
-        })
+        }
+        for key in ("reference", "history"):
+            if sample.get(key):
+                row[key] = sample[key]
+        reports.append(row)
     return {
         "samples": reports,
         "mean_unique_word_ratio": round(
             sum(row["unique_word_ratio"] for row in reports) / max(1, len(reports)), 3
         ),
-        "total_repeated_fourgram_count": sum(
-            row["repeated_fourgram_count"] for row in reports
-        ),
-        "total_replacement_character_count": sum(
-            row["replacement_character_count"] for row in reports
-        ),
-        "note": "Heuristic diagnostics only; inspect the saved answers for actual coherence.",
+        "total_repeated_fourgram_count": sum(row["repeated_fourgram_count"] for row in reports),
+        "total_replacement_character_count": sum(row["replacement_character_count"] for row in reports),
+        "note": "Includes held-out multi-turn conversations with reference replies; diagnostics are not a substitute for human review.",
     }
 
 
 def run_language_generator(data, device, out_dir, args, amp_enabled):
-    documents = build_language_documents(data, args.seed)
-    if len(documents) < 20:
-        raise RuntimeError("Language corpus is too small for a train/validation split.")
-    split = max(1, int(len(documents) * 0.95))
-    split = min(split, len(documents) - 1)
-    tokenizer = VocabularyTokenizer.build(
-        documents[:split], max_vocab=args.generator_vocab_size, min_frequency=2
+    train_documents, validation_documents, dialogue_eval, dataset_sources = build_language_documents(
+        data, args.seed, include_public=not args.smoke
     )
-    train_sequences = [
-        torch.tensor(tokenizer.encode(doc) + [tokenizer.EOS_ID],
-                     dtype=torch.long, device=device)
-        for doc in documents[:split]
-    ]
-    validation_sequences = [
-        torch.tensor(tokenizer.encode(doc) + [tokenizer.EOS_ID],
-                     dtype=torch.long, device=device)
-        for doc in documents[split:]
-    ]
+    if len(train_documents) < 20 or not validation_documents:
+        raise RuntimeError("Language train/validation documents are insufficient.")
+
+    tokenizer = VocabularyTokenizer.build(
+        train_documents, max_vocab=args.generator_vocab_size, min_frequency=2
+    )
+
+    def encode_documents(documents):
+        sequences = []
+        target_masks = []
+        for document in documents:
+            ids = tokenizer.encode(document) + [tokenizer.EOS_ID]
+            sequences.append(torch.tensor(ids, dtype=torch.long, device=device))
+            target_masks.append(assistant_target_mask(ids, tokenizer))
+        return sequences, target_masks
+
+    train_sequences, train_masks = encode_documents(train_documents)
+    validation_sequences, validation_masks = encode_documents(validation_documents)
     config = {
         "vocab_size": tokenizer.vocab_size,
         "pad_id": tokenizer.PAD_ID,
@@ -529,6 +726,7 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
         "dropout": 0.10,
         "tokenizer": tokenizer.FORMAT,
         "from_scratch": True,
+        "objective": "assistant-only causal next-token prediction over multi-turn context",
     }
     model = NeuralLanguageGenerator(config).to(device)
     optimizer, fused = make_optimizer(model.parameters(), args.generator_learning_rate, device)
@@ -536,12 +734,13 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
     epochs = 1 if args.smoke else args.generator_epochs
     batch_size = min(args.generator_batch_size, 4) if args.smoke else args.generator_batch_size
     train_token_count = sum(int(sequence.numel()) for sequence in train_sequences)
+    assistant_target_count = sum(int(mask.sum().item()) for mask in train_masks)
     steps_per_epoch = max(
-        20, min(160, train_token_count // max(1, config["block_size"] * batch_size))
+        120, min(320, assistant_target_count // max(1, config["block_size"] * batch_size))
     )
     if args.smoke:
         steps_per_epoch = 3
-    validation_batches = 2 if args.smoke else 20
+    validation_batches = 2 if args.smoke else 30
     best_validation_loss = float("inf")
     best_state = None
     best_epoch = 0
@@ -556,18 +755,14 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
         model.train()
         running_loss = 0.0
         for _ in range(steps_per_epoch):
-            inputs, targets = _language_batch(
-                train_sequences, config["block_size"], batch_size,
+            inputs, targets, loss_mask = _language_batch(
+                train_sequences, train_masks, config["block_size"], batch_size,
                 tokenizer.PAD_ID, device,
             )
             optimizer.zero_grad(set_to_none=True)
             with autocast_context(device, amp_enabled):
                 logits = model(inputs)
-                loss = F.cross_entropy(
-                    logits.float().reshape(-1, tokenizer.vocab_size),
-                    targets.reshape(-1),
-                    ignore_index=tokenizer.PAD_ID,
-                )
+                loss = _masked_language_loss(logits, targets, loss_mask, tokenizer.PAD_ID)
             if not torch.isfinite(loss):
                 raise RuntimeError("Language-generator training produced a non-finite loss.")
             scaler.scale(loss).backward()
@@ -581,24 +776,20 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
         validation_loss = 0.0
         with torch.no_grad():
             for _ in range(validation_batches):
-                inputs, targets = _language_batch(
-                    validation_sequences, config["block_size"], batch_size,
+                inputs, targets, loss_mask = _language_batch(
+                    validation_sequences, validation_masks, config["block_size"], batch_size,
                     tokenizer.PAD_ID, device,
                 )
                 with autocast_context(device, amp_enabled):
                     logits = model(inputs)
-                    loss = F.cross_entropy(
-                        logits.float().reshape(-1, tokenizer.vocab_size),
-                        targets.reshape(-1),
-                        ignore_index=tokenizer.PAD_ID,
-                    )
+                    loss = _masked_language_loss(logits, targets, loss_mask, tokenizer.PAD_ID)
                 validation_loss += float(loss.item())
         validation_loss /= validation_batches
         train_loss = running_loss / steps_per_epoch
         scheduler.step()
         print(
-            f"SubwordLanguageGenerator epoch {epoch + 1}/{epochs}: "
-            f"train_loss={train_loss:.4f} validation_loss={validation_loss:.4f} "
+            f"ConversationalGenerator epoch {epoch + 1}/{epochs}: "
+            f"train_assistant_loss={train_loss:.4f} validation_assistant_loss={validation_loss:.4f} "
             f"lr={optimizer.param_groups[0]['lr']:.6g}",
             flush=True,
         )
@@ -612,7 +803,7 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
             }
         else:
             stale_epochs += 1
-            if not args.smoke and stale_epochs >= 8:
+            if not args.smoke and stale_epochs >= 7:
                 break
 
     if best_state is None:
@@ -621,16 +812,29 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
     model.eval()
     tokenizer.save(out_dir / "tokenizer.json")
 
-    evaluation_prompts = [
-        "How do I begin creating a small game?",
-        "Why should a developer test a program after changing it?",
-        "A traveller finds a broken radio in an empty lighthouse. Write a short story.",
-        "What is a useful way to handle a task that feels too large?",
-        "How should you respond when you are unsure about an unfamiliar fact?",
-    ]
     evaluation_samples = []
     torch.manual_seed(args.seed + 991)
-    for prompt in evaluation_prompts:
+    random.Random(args.seed + 991).shuffle(dialogue_eval)
+    for sample in dialogue_eval[:24]:
+        answer = model.generate(
+            sample["formatted_prompt"], tokenizer, max_new_tokens=96,
+            temperature=0.42, top_k=32, top_p=0.90,
+        )
+        evaluation_samples.append({
+            "dataset": sample["dataset"],
+            "prompt": sample["prompt"],
+            "history": sample.get("history", []),
+            "reference": sample["reference"],
+            "answer": answer,
+        })
+
+    basic_prompts = [
+        "Hi! How are you doing today?",
+        "I've been learning programming, but loops are confusing. Could you explain them simply?",
+        "I want to make a small game. What is a sensible first step?",
+        "I do not know the answer to something. How should I handle that?",
+    ]
+    for prompt in basic_prompts:
         formatted = (
             f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\n"
             f"<|user|> {prompt}\n"
@@ -638,11 +842,15 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
             "<|assistant|>"
         )
         answer = model.generate(
-            formatted, tokenizer, max_new_tokens=96,
-            temperature=0.72, top_k=40, top_p=0.92,
+            formatted, tokenizer, max_new_tokens=80,
+            temperature=0.42, top_k=32, top_p=0.90,
         )
-        evaluation_samples.append({"prompt": prompt, "answer": answer})
-    generation_evaluation = _language_quality_stats(evaluation_samples)
+        evaluation_samples.append({
+            "dataset": "authored basic conversation prompt",
+            "prompt": prompt,
+            "answer": answer,
+        })
+    generation_evaluation = _build_language_quality_stats(evaluation_samples)
 
     sync_cuda(device)
     elapsed = time.perf_counter() - started
@@ -650,43 +858,48 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
     config.update({
         "parameters": parameters,
         "best_epoch": best_epoch,
-        "best_validation_loss": best_validation_loss,
+        "best_validation_assistant_loss": best_validation_loss,
         "training_documents": len(train_sequences),
         "validation_documents": len(validation_sequences),
         "training_tokens": train_token_count,
+        "assistant_target_tokens": assistant_target_count,
         "validation_tokens": sum(int(x.numel()) for x in validation_sequences),
+        "validation_assistant_target_tokens": sum(int(mask.sum().item()) for mask in validation_masks),
         "vocab_size": tokenizer.vocab_size,
         "random_initialisation": True,
+        "dataset_sources": dataset_sources,
     })
     save_checkpoint(out_dir / "generator.pt", model, {
         "name": "NeuralLanguageGenerator",
         "random_initialisation": True,
-        "objective": "causal next-subword prediction with UTF-8 byte fallback",
+        "objective": config["objective"],
         "best_epoch": best_epoch,
-        "best_validation_loss": best_validation_loss,
+        "best_validation_assistant_loss": best_validation_loss,
         "training_documents": len(train_sequences),
         "validation_documents": len(validation_sequences),
         "training_tokens": train_token_count,
-        "validation_tokens": sum(int(x.numel()) for x in validation_sequences),
+        "assistant_target_tokens": assistant_target_count,
         "optimizer_fused": fused,
         "context_length_tokens": config["block_size"],
         "tokenizer_format": tokenizer.FORMAT,
+        "dataset_sources": dataset_sources,
     })
     return {
         "parameters": parameters,
         "epochs_run": epoch + 1,
         "best_epoch": best_epoch,
-        "best_validation_loss": best_validation_loss,
-        "training_loss_last_epoch": train_loss,
+        "best_validation_assistant_loss": best_validation_loss,
+        "training_assistant_loss_last_epoch": train_loss,
         "training_documents": len(train_sequences),
         "validation_documents": len(validation_sequences),
         "training_tokens": train_token_count,
-        "validation_tokens": sum(int(x.numel()) for x in validation_sequences),
+        "assistant_target_tokens": assistant_target_count,
         "vocab_size": tokenizer.vocab_size,
         "steps_per_epoch": steps_per_epoch,
         "batch_size": batch_size,
         "seconds": elapsed,
         "fused_adamw": fused,
+        "dataset_sources": dataset_sources,
         "generation_evaluation": generation_evaluation,
     }, config
 
@@ -709,7 +922,7 @@ def write_runtime_package(output: Path) -> list[str]:
         written.append(name)
 
     (output / "README.txt").write_text(
-        "ORBIT Cognitive v2.1 - complete inference package\n"
+        "ORBIT Cognitive v2.2 Conversational - complete inference package\n"
         "=================================================\n\n"
         "This archive contains trained checkpoints, the neural language generator, "
         "configuration, fact memory, and the Python files needed to run the model.\n\n"
@@ -786,7 +999,7 @@ def main():
         json.dumps(serial_facts, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
     config = {
-        "project": "ORBIT Cognitive v2.1",
+        "project": "ORBIT Cognitive v2.2 Conversational",
         "dataset_fingerprint_sha256": data_fingerprint,
         "from_scratch": True,
         "pretrained_student_weights": False,
@@ -797,7 +1010,7 @@ def main():
         "entity_count": len(data["entities"]),
         "relation_count": len(data["relations"]),
         "fact_count": len(data["facts"]),
-        "language_generator": {"block_size": args.generator_block_size, "dim": args.generator_dim, "layers": args.generator_layers, "heads": args.generator_heads, "dropout": 0.10, "tokenizer": VocabularyTokenizer.FORMAT, "from_scratch": True},
+        "language_generator": {"block_size": args.generator_block_size, "dim": args.generator_dim, "layers": args.generator_layers, "heads": args.generator_heads, "dropout": 0.10, "tokenizer": VocabularyTokenizer.FORMAT, "from_scratch": True, "block_size": args.generator_block_size},
         "seed": args.seed,
         "device": device_name,
         "device_memory_gb": device_memory_gb,
@@ -810,11 +1023,11 @@ def main():
         "amp": amp_enabled,
         "optimizer": "AdamW (fused when supported)",
         "training_examples": {k: len(v) for k, v in data["examples"].items()},
-        "dataset": "Original synthetic multi-turn dialogue corpus and fact-grounded prompts; document-level split",
-        "dataset_scope_warning": "Small original synthetic corpus; training from scratch cannot be assumed to produce broad language understanding or comprehensive world knowledge.",
+        "dataset": "Original authored dialogue plus English-only reviewed OpenAssistant OASST1 and English Daily Dialogues 10K; conversation-level validation split",
+        "dataset_scope_warning": "Student weights are randomly initialised. Public dialogue datasets improve conversational coverage but do not guarantee general reasoning or factual accuracy.",
     }
     (output / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
-    print("ORBIT Cognitive v2.1 training configuration:")
+    print("ORBIT Cognitive v2.2 Conversational training configuration:")
     print(json.dumps(config, indent=2), flush=True)
 
     start = time.perf_counter()
@@ -826,9 +1039,10 @@ def main():
     generator_metrics, generator_config = run_language_generator(data, device, output, args, amp_enabled)
     metrics["language_generator"] = generator_metrics
     config["language_generator"] = generator_config
+    config["language_dataset_sources"] = generator_config.get("dataset_sources", [])
     total_seconds = time.perf_counter() - start
     report = {
-        "project": "ORBIT Cognitive v2.1",
+        "project": "ORBIT Cognitive v2.2 Conversational",
         "status": "smoke_test_only" if args.smoke else "trained",
         "all_students_randomly_initialised": True,
         "teacher_weights_loaded": False,
@@ -852,9 +1066,9 @@ def main():
         },
         "limitations": [
             "The seed fact graph is small and manually curated.",
-            "Template-generated language coverage is narrow.",
+            "Public conversation datasets are finite and domain-limited; generated answers still require human evaluation.",
             "High benchmark scores do not establish general reasoning or broad language understanding.",
-            "The generator is trained from scratch on a small original synthetic dialogue corpus; subword tokenisation improves text efficiency but does not guarantee human-level fluency or factual accuracy.",
+            "The generator is trained from scratch on reviewed public dialogue datasets plus authored examples; this does not guarantee human-level fluency or factual accuracy.",
             "The 67-fact graph provides narrow factual grounding; the language model can still make unsupported statements.",
         ],
     }
