@@ -201,6 +201,68 @@ The observed v0.2 kernel reference was `dud12345/orbit-seed-v0-2-fine-tuning`. I
 
 ---
 
+## 6A. Latest training handoff — 2026-11-04 01:03 UTC
+
+This is newer than the historical snapshot below. Check live Actions/Kaggle
+status again before continuing.
+
+### User requested stop-v0.2 / start-v0.3 transition
+
+- v0.2 GitHub Actions run `41744997703` is **completed/cancelled**. Its GitHub
+  polling step was cancelled; the workflow did not download or publish the
+  v0.2 checkpoint.
+- The underlying v0.2 Kaggle notebook is
+  `dud12345/orbit-seed-v0-2-fine-tuning`.
+- Its Kaggle status was checked at 2026-11-04 01:02:39 UTC and was still
+  `KernelWorkerStatus.RUNNING`.
+- An API cancellation request was attempted using the Kaggle SDK and the
+  confirmed session/version value `2` (the v0.2 push log said "Kernel version
+  2 successfully pushed"). Kaggle rejected it with HTTP 403:
+  `Permission 'kernelSessions.cancel' was denied`.
+- The documented legacy REST route attempt returned 404. Do not retry these
+  same API calls repeatedly with the same token; they are permission-blocked.
+- The GitHub secret token can list and push notebook versions, but it is not
+  authorized for `kernelSessions.cancel`. A Kaggle OAuth authorization with
+  sufficient permission or manual stop in Kaggle UI is required.
+- To stop it manually: open
+  https://www.kaggle.com/code/dud12345/orbit-seed-v0-2-fine-tuning,
+  open **View Active Events** (bottom-left of Kaggle), find the v0.2 run,
+  open its three-dot menu, and choose **Stop Session**. Kaggle documents the
+  Active Events controls for stopping running sessions. See
+  https://www.kaggle.com/docs/efficient-gpu-usage and
+  https://www.kaggle.com/product-feedback/274181.
+
+### v0.3 Scratch GPU job
+
+- Scratch workflow run
+  [41750482331](https://github.com/lm11-gif/ok/actions/runs/41750482331) is
+  **in_progress**.
+- Kaggle notebook:
+  `dud12345/orbit-seed-v0-3-scratch-training`.
+- Kaggle status checked at 2026-11-04 01:02:39 UTC:
+  `KernelWorkerStatus.RUNNING`.
+- GitHub Actions passed scratch script syntax, Kaggle credentials, CLI
+  installation, notebook preparation, and Kaggle submit. It is currently in
+  `Wait for Kaggle training to finish`.
+- Do not start another scratch job or edit
+  `orbit/seed_model_v0.3_scratch/START_TRAINING.txt` while this is active.
+- The v0.2 DPO stage was skipped in the cancellation handoff. The active
+  scratch workflow was triggered and submitted independently; scratch DPO
+  remains gated on a successful v0.3 scratch checkpoint release.
+- Both Kaggle notebooks were still RUNNING during the last status check, so
+  they may be consuming two GPU sessions until the user stops v0.2 manually.
+  Be transparent about this; do not report the v0.2 Kaggle session as
+  cancelled merely because its GitHub workflow is cancelled.
+
+### One-off helper workflow
+
+`.github/workflows/cancel-v02-and-start-scratch.yml` was converted into a
+read-only diagnostic workflow named "Check ORBIT Kaggle GPU sessions". It
+prints current Kaggle status and v0.2 logs. It must keep the two Kaggle GitHub
+secrets in its environment. It is not itself able to cancel a session.
+
+---
+
 ## 6. Verified status snapshot — 2026-11-04
 
 This section is a historical snapshot, not a promise that the state is still current. Always query GitHub Actions before continuing.
