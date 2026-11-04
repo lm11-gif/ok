@@ -356,55 +356,57 @@ Do not silently replace the v0.3 random-init student with SmolLM2/SmolLM3 weight
 
 ## 10. ORBIT Cognitive v1 — implementation and GPU training
 
-The first implementation is now committed under `orbit/cognitive/`. It is a three-network, randomly initialised prototype, not yet a GPU-trained checkpoint. The user explicitly requires specialist-network training on a GPU. Normal CPU training must remain blocked; CPU is permitted for tests and the CI smoke run only.
+The first implementation is committed under `orbit/cognitive/`. It has passed the CI run at [41762227592](https://github.com/lm11-gif/ok/actions/runs/41762227592) for compilation, unit tests, CPU smoke training, archive validation, and checkpoint loading/inference. A later CI run for the self-contained Kaggle bundle is pending/being checked; inspect current Actions before triggering another training run.
 
 ### Files
 
-- `orbit/cognitive/COGNITIVE_ARCHITECTURE.md` — system design and implementation notes.
+- `orbit/cognitive/COGNITIVE_ARCHITECTURE.md` — design and implementation record.
 - `orbit/cognitive/README.md` — install, train, use, limitations.
-- `orbit/cognitive/core.py` — curated seed knowledge graph, vocabulary, and deterministic query generation.
+- `orbit/cognitive/core.py` — curated seed knowledge graph, vocabulary, deterministic question generation, stratified graph-group splits.
 - `orbit/cognitive/models.py` — PerceptionNet, AssociationNet, and MemoryNet definitions.
-- `orbit/cognitive/train.py` — staged GPU trainer, validation, timing, and zip archive creation.
+- `orbit/cognitive/train.py` — staged training, GPU checks, validation, timing, checkpoints, and archive creation.
 - `orbit/cognitive/chat.py` — inference controller and cautious template answer composition.
-- `orbit/cognitive/tests/test_cognitive.py` — data and model shape tests.
-- `.github/workflows/check-orbit-cognitive.yml` — syntax, unit, and CPU smoke-test workflow.
-- `.github/workflows/train-orbit-cognitive-kaggle.yml` — manual-only Kaggle T4 workflow, validation, Actions artifact upload, and release.
-- `orbit/cognitive/START_TRAINING.txt` — push trigger for manual training via the dedicated file.
+- `orbit/cognitive/bundle_kaggle.py` — concatenates core, model, and trainer definitions into one self-contained Kaggle script. Kaggle script mode did not import adjacent `.py` modules.
+- `orbit/cognitive/tests/test_cognitive.py` — seed-data, split, multiple-valid-object, and network-shape tests.
+- `.github/workflows/check-orbit-cognitive.yml` — syntax, unit, bundled-script CPU smoke test, checkpoint loading/inference, and zip verification.
+- `.github/workflows/train-orbit-cognitive-kaggle.yml` — manual-only Kaggle T4 workflow, model validation, durable Actions artifact upload, then release publication.
+- `.github/workflows/recover-orbit-cognitive-kaggle.yml` — recovery monitor for an already-submitted Kaggle kernel; it checks/downloads an existing run and must not be used to submit a second GPU job.
+- `orbit/cognitive/START_TRAINING.txt` — manual training trigger.
+- `orbit/cognitive/RECOVER_TRAINING.txt` — path recognized by the recovery workflow if explicitly needed.
 
-### Network roles and interfaces
+### Network roles and data
 
 - **PerceptionNet:** predicts subject concept ID and relation ID from question tokens.
-- **AssociationNet:** DistMult-style link scorer predicts object concepts for a subject/relation pair.
+- **AssociationNet:** DistMult-style link scorer predicts object concepts for a subject/relation pair. Its loss is multi-positive: a subject/relation pair can have multiple valid objects (e.g. a tree needs both water and sunlight). The graph split is stratified by relation and keeps groups intact.
 - **MemoryNet:** learns to rank stored fact records from a natural-language query.
-- The Python controller supplies exact entity-match guarding, uses perception to filter relations, consults association scores, retrieves a fact, and uses a constrained relation template to form the answer. Unknown concepts or unsupported subject/relation combinations should be refused rather than filled with unrelated memories.
+- The controller uses whole-word entity matching, PerceptionNet relation/subject predictions, AssociationNet scores, and MemoryNet retrieval, then uses a constrained relation template. Unknown entities and unsupported relationships should be rejected rather than answered from unrelated memory.
 
-Networks exchange shared integer concept/relation IDs and a shared vocabulary/fact schema. They do not pass unstructured generated paragraphs to one another.
+The seed graph contains only 67 curated facts, 67 entities, and 18 relation types. Training/test examples are generated from question templates. This is a reproducible bootstrap benchmark, not broad factual knowledge. Template-based scores are not general language or reasoning benchmarks; new manually authored held-out data is required before making capability claims.
 
-### Training data and honest scope
+All student networks are randomly initialised. No pretrained weights, hidden states, or pretrained embeddings are loaded. No teacher model is used in the first Cognitive run.
 
-The initial dataset is a small curated seed graph in `core.py`, expanded into question variants. Train, validation, and test use separate question-template indices. Association edges have a deterministic graph split. No external dataset or teacher is loaded. Every student starts from random initialization.
+### Speed choices
 
-This is only a bootstrap benchmark. It will teach the networks to parse/retrieve facts in the small graph; it does not provide broad natural-language understanding or general reasoning. Scores on template-generated examples must not be presented as broad intelligence benchmarks. Expand and independently review the fact graph and write manually authored held-out questions before making capability claims.
+- Pre-tokenize once and keep token tensors on the GPU.
+- Default batch size 256, reducing Python and kernel-launch overhead for the compact models.
+- CUDA FP16 autocast plus GradScaler on GPU; use `--no-amp` to disable.
+- Try fused AdamW on CUDA; gracefully fall back if unsupported.
+- Enable TF32 only on Ampere+ hardware.
+- Vectorise MemoryNet similarity over the full fact table per batch.
+- Train the small specialists sequentially, reusing one GPU process and avoiding concurrent models.
+- Use validation-based early stopping and keep the best checkpoint.
+- `torch.compile` is deliberately off by default because compile time can outweigh savings on networks this small.
+- CI now installs CPU-only PyTorch for CPU tests rather than downloading the larger CUDA wheel. Kaggle uses its preinstalled CUDA PyTorch stack.
 
-### Performance choices currently implemented
+No speedup is claimed until a real Kaggle report contains the GPU model, CUDA/PyTorch versions, per-model seconds, throughput-relevant counts, and peak allocated GPU memory.
 
-- Tokenize data once and keep the small training tensors on the GPU.
-- CUDA FP16 autocast with GradScaler; `--no-amp` disables it.
-- Fused AdamW is attempted on CUDA and falls back when unsupported.
-- TF32 is enabled only on Ampere-or-newer GPUs.
-- Memory retrieval scores all candidate facts in one matrix operation.
-- Models train sequentially in one Kaggle job; no competing GPU processes or separate model downloads.
-- Best checkpoints are selected from held-out validation, with early stopping.
-- `torch.compile` is deliberately not enabled by default: compile warm-up may cost more than it saves for these small models.
+### Kaggle launch and recovery history
 
-Do not claim a measured speed-up until the Kaggle report provides timings and GPU details.
+- First launch workflow: [41762443657](https://github.com/lm11-gif/ok/actions/runs/41762443657). Kaggle accepted version 1 of `dud12345/orbit-cognitive-v1-gpu-training`, but the workflow then failed because `kaggle kernels list --mine --search ... --format json` produced empty output and the JSON parser failed. The submission had already been accepted; never assume a failed GitHub job means the Kaggle push did not happen.
+- Recovery workflow: [41762583241](https://github.com/lm11-gif/ok/actions/runs/41762583241) queried that exact kernel. Kaggle reported `KernelWorkerStatus.ERROR`. Its traceback showed `ImportError: attempted relative import with no known parent package` followed by `ModuleNotFoundError: No module named 'core'`. The Kaggle script runner exposed only the specified entry-point file, not the companion modules.
+- Fix committed: `bundle_kaggle.py` makes one self-contained script. The training workflow now pushes that bundled file and sets the kernel ID directly as `$KAGGLE_USERNAME/orbit-cognitive-v1-gpu-training`, without parsing the list output.
+- The failed attempt did not produce trained checkpoints. The corrected workflow has not yet been confirmed as submitted/completed. Check the latest Actions and Kaggle kernel status before any retry.
+- The recovery workflow does not push or launch a kernel; it monitors an existing submission, downloads its output, validates the report, then uploads an Actions artifact before publishing a release.
+- All ORBIT Kaggle training jobs share job-level concurrency group `orbit-kaggle-gpu-shared`; do not bypass this lock or start a second Kaggle job concurrently.
 
-### Current workflows
-
-- CI is triggered by Cognitive code changes and includes a one-epoch CPU smoke test (not representative of GPU throughput).
-- Kaggle training is **manual-only** via workflow dispatch or a change to `START_TRAINING.txt`. Ordinary code pushes must not consume GPU quota.
-- The GPU workflow verifies CUDA in `train.py`, downloads Kaggle outputs, checks all three checkpoints and lineage markers, uploads the archive/report/config as a GitHub Actions artifact, then uploads the archive/report/config to the `orbit-cognitive-v1` release.
-- It does not commit trained weights or report files into `main`, avoiding the non-fast-forward publishing failure seen in v0.3.
-- Do not run a new Kaggle session until the CI workflow succeeds. Verify the existing Kaggle GPU session list if available and use only one Kaggle GPU job at a time.
-
-**No Cognitive v1 GPU training has been launched or completed yet.** The implementation and workflow are committed, but the trained checkpoint and measured GPU speed remain pending. Preserve ORBIT Seed v0.3 as a separate scratch-LM experiment and do not merge its weights into these specialist networks.
+**Current truth:** implementation and CPU/CI correctness checks are in place. There is no confirmed ORBIT Cognitive GPU-trained checkpoint, no published `orbit-cognitive-v1` release, and no measured GPU speed result yet. Preserve ORBIT Seed v0.3 as a separate scratch-LM experiment.
