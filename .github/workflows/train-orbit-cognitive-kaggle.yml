@@ -69,7 +69,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          KERNEL_ID="$KAGGLE_USERNAME/orbit-cognitive-v2-3-conversational-gpu-training"
+          KERNEL_ID="$KAGGLE_USERNAME/orbit-cognitive-v2-3-ultrachat-gpu-training"
           kaggle kernels push -p "$KERNEL_DIR" --timeout 43200 --accelerator NvidiaTeslaT4
           echo "KERNEL_ID=$KERNEL_ID" >> "$GITHUB_ENV"
           echo "Submitted Kaggle kernel: $KERNEL_ID"
