@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from contextlib import nullcontext
 import random
 import shutil
 import time
@@ -70,11 +71,9 @@ def make_optimizer(parameters, lr: float, device: torch.device):
 
 
 def autocast_context(device: torch.device, amp_enabled: bool):
-    return torch.autocast(
-        device_type="cuda",
-        dtype=torch.float16,
-        enabled=(device.type == "cuda" and amp_enabled),
-    )
+    if device.type != "cuda" or not amp_enabled:
+        return nullcontext()
+    return torch.autocast(device_type="cuda", dtype=torch.float16, enabled=True)
 
 
 def new_scaler(device: torch.device, amp_enabled: bool):
