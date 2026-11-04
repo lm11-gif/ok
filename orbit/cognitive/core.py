@@ -300,6 +300,7 @@ def encode_examples(rows: list[dict[str, Any]], vocab: dict[str, int], max_len: 
             np.zeros((0, max_len), dtype=np.int64),
             np.zeros((0,), dtype=np.int64),
             np.zeros((0,), dtype=np.int64),
+            np.zeros((0,), dtype=np.int64),
         )
     x = np.stack([encode_text(row["text"], vocab, max_len) for row in rows])
     subjects = np.asarray([row["subject_id"] for row in rows], dtype=np.int64)
