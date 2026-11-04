@@ -1,2 +1,2 @@
-GPU training requested on 2026-11-04 after CI run 41762227592 passed.
-Run the manual-only ORBIT Cognitive v1 Kaggle T4 workflow. Train PerceptionNet, AssociationNet, and MemoryNet from random initialisation; archive checkpoints and training report before release publication.
+GPU training requested on 2026-11-04 after bundled-entrypoint CI run 41762951187 passed.
+Submit a new version of the existing canonical kernel dud12345/orbit-cognitive-v1-gpu-training. The previous version failed before training because Kaggle did not expose adjacent Python modules; this version must use bundle_kaggle.py and then run PerceptionNet, AssociationNet, and MemoryNet from random initialisation.
