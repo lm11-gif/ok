@@ -1,14 +1,14 @@
-name: Train ORBIT Cognitive v2.2 Conversational on Kaggle GPU
+name: Train ORBIT Cognitive v2.3 Conversational on Kaggle GPU
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, orbit-v2.3-ultrachat]
     paths:
       - "orbit/cognitive/START_TRAINING.txt"
 permissions:
   contents: write
 concurrency:
-  group: orbit-cognitive-v2-2-kaggle
+  group: orbit-cognitive-v2-3-kaggle
   cancel-in-progress: false
 jobs:
   train:
@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.ref }}
       - name: Check Python syntax
         run: python -m py_compile orbit/cognitive/core.py orbit/cognitive/models.py orbit/cognitive/language.py orbit/cognitive/train.py orbit/cognitive/chat.py orbit/cognitive/bundle_kaggle.py
       - name: Validate Kaggle credentials
@@ -49,8 +49,8 @@ jobs:
           python -m py_compile "$KERNEL_DIR/train.py"
           cat > "$KERNEL_DIR/kernel-metadata.json" <<EOF
           {
-            "id": "$KAGGLE_USERNAME/orbit-cognitive-v2-2-conversational-gpu-training",
-            "title": "ORBIT Cognitive v2.2 Conversational GPU Training",
+            "id": "$KAGGLE_USERNAME/orbit-cognitive-v2-3-ultrachat-gpu-training",
+            "title": "ORBIT Cognitive v2.3 UltraChat GPU Training",
             "code_file": "train.py",
             "language": "python",
             "kernel_type": "script",
@@ -69,7 +69,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          KERNEL_ID="$KAGGLE_USERNAME/orbit-cognitive-v2-2-conversational-gpu-training"
+          KERNEL_ID="$KAGGLE_USERNAME/orbit-cognitive-v2-3-conversational-gpu-training"
           kaggle kernels push -p "$KERNEL_DIR" --timeout 43200 --accelerator NvidiaTeslaT4
           echo "KERNEL_ID=$KERNEL_ID" >> "$GITHUB_ENV"
           echo "Submitted Kaggle kernel: $KERNEL_ID"
@@ -106,9 +106,9 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/orbit-cognitive-output" "$RUNNER_TEMP/orbit-cognitive-extracted"
           kaggle kernels output "$KERNEL_ID" -p "$RUNNER_TEMP/orbit-cognitive-output" --force
-          ARCHIVE="$(find "$RUNNER_TEMP/orbit-cognitive-output" -type f -name 'orbit-cognitive-v2.2.zip' -print -quit)"
+          ARCHIVE="$(find "$RUNNER_TEMP/orbit-cognitive-output" -type f -name 'orbit-cognitive-v2.3.zip' -print -quit)"
           if [[ -z "$ARCHIVE" || ! -s "$ARCHIVE" ]]; then
-            echo "::error::Kaggle output did not contain orbit-cognitive-v2.2.zip."
+            echo "::error::Kaggle output did not contain orbit-cognitive-v2.3.zip."
             find "$RUNNER_TEMP/orbit-cognitive-output" -maxdepth 5 -type f -printf '%p (%s bytes)\n'
             exit 1
           fi
@@ -133,7 +133,7 @@ jobs:
       - name: Upload durable workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: orbit-cognitive-v2-2-training-${{ github.run_id }}
+          name: orbit-cognitive-v2-3-training-${{ github.run_id }}
           path: |
             ${{ env.ORBIT_COGNITIVE_ARCHIVE }}
             ${{ env.ORBIT_COGNITIVE_EXTRACTED }}/training_report.json
@@ -144,15 +144,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TAG="orbit-cognitive-v2.2"
+          TAG="orbit-cognitive-v2.3-rc1"
           NOTES="$RUNNER_TEMP/orbit-cognitive-release-notes.md"
           cat > "$NOTES" <<'EOF'
-          ORBIT Cognitive v2.2 Conversational is an experimental, GPU-trained multi-network prototype.
+          ORBIT Cognitive v2.3 is an experimental conversational-model candidate, not a claim of human-level coherence.
           PerceptionNet, AssociationNet, MemoryNet, and NeuralLanguageGenerator are randomly initialised.
-          The generator uses a learned word/punctuation vocabulary with UTF-8 byte fallback. Training windows never cross document boundaries, and the report includes generated prompt-evaluation samples.
+          The generator uses a learned word/punctuation vocabulary with UTF-8 byte fallback. It uses OASST1, Daily Dialogues 10K, and a 25,000-dialogue UltraChat SFT sample as text-only data. The report includes held-out references and autoregressive multi-turn rollout samples.
           The release contains all specialist checkpoints, the seed fact graph,
           vocabularies, configuration, and training/evaluation report.
-          It is not a general-purpose assistant.
+          This prerelease is experimental; inspect the generated responses and conversation rollouts before relying on it. No pretrained model weights are loaded.
           EOF
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$TAG" "$ORBIT_COGNITIVE_ARCHIVE" \
@@ -163,15 +163,15 @@ jobs:
             gh release create "$TAG" "$ORBIT_COGNITIVE_ARCHIVE" \
               "$ORBIT_COGNITIVE_EXTRACTED/training_report.json" \
               "$ORBIT_COGNITIVE_EXTRACTED/config.json" \
-              --repo "$GITHUB_REPOSITORY" --title "ORBIT Cognitive v2.2 Conversational" \
-              --notes-file "$NOTES" --target main
+              --repo "$GITHUB_REPOSITORY" --title "ORBIT Cognitive v2.3 Conversational Candidate" \
+              --notes-file "$NOTES" --prerelease --target "$GITHUB_SHA"
           fi
       - name: Publish training summary
         if: always()
         shell: bash
         run: |
           {
-            echo "## ORBIT Cognitive v2.2 Conversational GPU Training"
+            echo "## ORBIT Cognitive v2.3 Conversational GPU Training"
             echo ""
             echo "Kaggle kernel: ${KERNEL_ID:-not submitted}"
             if [[ -n "${ORBIT_COGNITIVE_EXTRACTED:-}" && -f "$ORBIT_COGNITIVE_EXTRACTED/training_report.json" ]]; then
