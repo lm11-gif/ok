@@ -1,0 +1,32 @@
+name: Diagnose ORBIT Kaggle kernel reference
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/diagnose-orbit-kaggle.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+    steps:
+      - name: Install Kaggle CLI
+        run: python -m pip install --upgrade kaggle
+
+      - name: List matching notebooks owned by the authenticated account
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${KAGGLE_API_TOKEN:-}" || -z "${KAGGLE_USERNAME:-}" ]]; then
+            echo "::error::Kaggle credentials are missing."
+            exit 1
+          fi
+          echo "Checking the authenticated account's own notebooks; credentials are not printed."
+          kaggle kernels list --mine --search "ORBIT Seed v0.2" --format json
