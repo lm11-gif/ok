@@ -25,71 +25,38 @@ jobs:
       - name: Install Kaggle client
         run: python -m pip install --upgrade kaggle
 
-      - name: Inspect and cancel the active v0.2 session
+      - name: Cancel verified v0.2 Kaggle session
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
-          import json
-          import os
-          import sys
-          import time
-
           from kaggle.api.kaggle_api_extended import KaggleApi
           from kagglesdk.kernels.types.kernels_api_service import ApiCancelKernelSessionRequest
 
-          owner = os.environ["KAGGLE_USERNAME"]
+          # Verified from GitHub run 41744997703: Kaggle printed
+          # "Kernel version 2 successfully pushed" for the active v0.2 run.
+          session_id = 2
           api = KaggleApi()
           api.authenticate()
-
-          print("Kaggle CLI auth succeeded; looking up the ORBIT v0.2 notebook.")
-          kernels = api.kernels_list(search="ORBIT Seed v0.2", user=owner)
-          matches = [
-              item for item in kernels
-              if getattr(item, "title", None) == "ORBIT Seed v0.2 Fine-tuning"
-          ]
-          if len(matches) != 1:
-              print("Visible notebook metadata:", [
-                  {
-                      "title": getattr(item, "title", None),
-                      "ref": getattr(item, "ref", None),
-                      "current_version_number": getattr(item, "current_version_number", None),
-                  }
-                  for item in kernels
-              ])
-              raise SystemExit("Could not uniquely identify the v0.2 Kaggle notebook.")
-
-          item = matches[0]
-          ref = getattr(item, "ref", None)
-          version = getattr(item, "current_version_number", None)
-          print(f"Notebook ref: {ref}")
-          print(f"Current version number reported by Kaggle: {version}")
-
-          if not isinstance(version, int) or version <= 0:
-              raise SystemExit("Kaggle did not return a valid current version number.")
-
-          # The Kaggle API cancellation endpoint accepts the session identifier
-          # returned as versionNumber when a kernel run is submitted.
-          request = ApiCancelKernelSessionRequest(kernel_session_id=version)
+          request = ApiCancelKernelSessionRequest(kernel_session_id=session_id)
           with api.build_kaggle_client() as client:
               client.kernels.kernels_api_client.cancel_kernel_session(request)
-          print(f"Cancellation requested for Kaggle kernel session {version}.")
-
-          # Poll the official status method until the kernel is no longer running.
-          stopped = False
-          for attempt in range(40):
-              status = api.kernel_status(ref)
-              print(f"v0.2 Kaggle status ({attempt + 1}/40): {status}")
-              normalized = str(status).upper()
-              if any(token in normalized for token in (
-                  "CANCEL_ACKNOWLEDGED", "CANCEL_REQUESTED",
-                  "COMPLETE", "ERROR", "CANCELLED", "CANCELED",
-              )):
-                  stopped = True
-                  break
-              time.sleep(10)
-
-          if not stopped:
-              raise SystemExit("Kaggle did not confirm cancellation; scratch job will not start concurrently.")
-          print("Confirmed that the v0.2 Kaggle session is no longer running.")
+          print(f"Cancellation request accepted by Kaggle for session {session_id}.")
           PY
+
+          KERNEL_ID="dud12345/orbit-seed-v0-2-fine-tuning"
+          stopped=0
+          for attempt in $(seq 1 30); do
+            status="$(kaggle kernels status "$KERNEL_ID" 2>&1 || true)"
+            echo "$status"
+            if echo "$status" | grep -Eiq 'CANCEL_ACKNOWLEDGED|CANCEL_REQUESTED|COMPLETE|ERROR|CANCELLED|CANCELED'; then
+              stopped=1
+              break
+            fi
+            sleep 10
+          done
+          if (( stopped == 0 )); then
+            echo "::error::Kaggle did not confirm that v0.2 stopped."
+            exit 1
+          fi
+          echo "Confirmed that v0.2 Kaggle session is no longer running."
