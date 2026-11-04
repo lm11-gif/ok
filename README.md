@@ -38,3 +38,7 @@ but one initial run will not make it comparable to large pretrained
 assistants. Expect it to need substantially more data and training time, and
 judge it from its held-out results and actual generated answers rather than
 training loss alone.
+
+## Development handoff
+
+- [README_FOR_AI.md](README_FOR_AI.md) — detailed project context, model lineage, training workflows, verified status, and instructions for future AI assistants/developers.
