@@ -503,11 +503,11 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
     documents = build_language_documents(data, args.seed)
     if len(documents) < 20:
         raise RuntimeError("Language corpus is too small for a train/validation split.")
+    split = max(1, int(len(documents) * 0.95))
+    split = min(split, len(documents) - 1)
     tokenizer = VocabularyTokenizer.build(
         documents[:split], max_vocab=args.generator_vocab_size, min_frequency=2
     )
-    split = max(1, int(len(documents) * 0.95))
-    split = min(split, len(documents) - 1)
     train_sequences = [
         torch.tensor(tokenizer.encode(doc) + [tokenizer.EOS_ID],
                      dtype=torch.long, device=device)
