@@ -1,25 +1,40 @@
 # ORBIT workspace
 
-This repository now houses the ORBIT AI Playground and ORBIT Seed research model.
+This repository houses the ORBIT AI Playground and several deliberately
+separate ORBIT Seed model experiments.
 
 ## Projects
 
 - [AI Playground](orbit/ai_playground/README.md) — browser-based front end for Ollama and OpenAI-compatible models.
-- [ORBIT Seed 0.1](orbit/seed_model/README.md) — the small decoder-only Transformer trained from random initialization.
-- [Kaggle GPU continuation guide](orbit/seed_model/KAGGLE_GPU_GUIDE.md) — instructions for continuing the existing Seed checkpoint on a hosted GPU.
-- [Kaggle notebook](orbit/training/ORBIT_Kaggle_GPU_Training.ipynb) — GPU continuation notebook.
-- [GitHub binary uploader](orbit/tools/github-binary-uploader.html) — browser utility for uploading ORBIT's weights and tokenizer.
+- [ORBIT Seed v0.1](orbit/seed_model/README.md) — the original 871k-parameter model trained from random initialization. It is an educational prototype and is not yet a coherent general-purpose assistant.
+- [ORBIT Seed v0.2](orbit/seed_model_v0.2/README.md) — a separate conversational model fine-tuned from pretrained SmolLM2-360M. This version is **not** scratch-trained.
+- [ORBIT Seed v0.3 Scratch](orbit/seed_model_v0.3_scratch/README.md) — a separate model with random student-weight initialization, its own tokenizer, FineWeb-Edu pretraining, assistant tuning, and a scratch-specific teacher DPO stage.
 
-## Important model status
+## Model lineage
 
-ORBIT Seed 0.1 is an educational prototype with 871,552 parameters, a 160-token context, and 2,400 recorded CPU training updates. Its evaluation found that generated answers were not coherent enough for dependable conversation. Lower training loss on its small synthetic corpus does not establish general language ability.
+| Version | Student initialization | Training approach |
+|---|---|---|
+| v0.1 | Random | Small synthetic corpus; 871,552 parameters |
+| v0.2 | Pretrained SmolLM2-360M | Supervised fine-tuning and separate teacher DPO |
+| v0.3 Scratch | Random | FineWeb-Edu pretraining, assistant tuning, then DPO using teacher-written preferences |
 
-The app source, model architecture, inference and training scripts, corpus generator, documentation, and Kaggle notebook are tracked here. The multi-megabyte synthetic corpus files can be regenerated locally with `orbit/seed_model/make_corpus.py`. The original binary checkpoint and SentencePiece model are not included in this commit because the connected GitHub actions available in this session cannot upload arbitrary binary files. Add these two files from the original model archive to `orbit/seed_model/`:
-- `model.safetensors`
-- `tokenizer.model`
+For v0.3, SmolLM3-3B is used only to generate additional training and preference text. Its pretrained weights are not loaded into the ORBIT student. The v0.3 configuration and training report explicitly record that the student is scratch-initialized.
 
-Do not replace them with placeholders. The GPU continuation script requires both files. Follow [the remaining binary asset upload steps](orbit/UPLOAD_REMAINING.md) to add them through GitHub's web uploader.
+## Training
 
-## Repository access
+- [ORBIT v0.2 Kaggle fine-tuning workflow](.github/workflows/train-orbit-v02.yml)
+- [ORBIT v0.2 teacher DPO workflow](.github/workflows/train-orbit-v02-dpo.yml)
+- [ORBIT v0.3 Scratch Kaggle workflow](.github/workflows/train-orbit-v03-scratch.yml)
+- [ORBIT v0.3 Scratch DPO workflow](.github/workflows/train-orbit-v03-scratch-dpo.yml)
 
-The connected GitHub integration has verified read and push permissions for this repository. Changes made through it are committed directly to `main`.
+The v0.3 scratch training workflow is configured to run after the current v0.2 fine-tuning/DPO sequence completes, to avoid two Kaggle jobs competing for the same free GPU allocation. It can also be started manually from GitHub Actions.
+
+## Important limitations
+
+The v0.3 Scratch design is an intentionally small first model (approximately
+25M parameters, 512-token context, up to 100M pretraining tokens per initial
+run) sized for a free Kaggle T4. It is genuinely trained from random weights,
+but one initial run will not make it comparable to large pretrained
+assistants. Expect it to need substantially more data and training time, and
+judge it from its held-out results and actual generated answers rather than
+training loss alone.
