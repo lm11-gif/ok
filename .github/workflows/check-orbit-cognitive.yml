@@ -10,6 +10,10 @@ on:
       - "orbit/cognitive/**"
       - ".github/workflows/check-orbit-cognitive.yml"
   workflow_dispatch:
+concurrency:
+  group: orbit-cognitive-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 jobs:
