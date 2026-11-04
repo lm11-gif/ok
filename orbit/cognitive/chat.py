@@ -27,7 +27,21 @@ ANSWER_FORMS = {
 
 def load_checkpoint(path: Path, model, device):
     state = torch.load(path, map_location=device)
-    model.load_state_dict(state["state_dict"])
+    model_state = state["state_dict"]
+
+    # Compatibility with the first v1 release, whose graph scorer shared one
+    # entity embedding table. New AssociationNet has separate subject/object
+    # tables; initialise both from the legacy table when loading an old zip.
+    if isinstance(model, AssociationNet) and "entity.weight" in model_state:
+        legacy = model_state
+        model_state = {
+            "subject.weight": legacy["entity.weight"],
+            "object.weight": legacy["entity.weight"].clone(),
+            "relation.weight": legacy["relation.weight"],
+            "object_bias.weight": legacy["object_bias.weight"],
+        }
+
+    model.load_state_dict(model_state)
     model.eval()
     return state.get("metadata", {})
 
