@@ -406,15 +406,15 @@ def build_language_documents(data: dict[str, Any], seed: int) -> list[str]:
     """Build complete prompt/answer documents with one consistent chat format."""
     base_text = load_base_language_corpus()
     documents: list[str] = []
-    for chunk in base_text.split("\\n\\n"):
+    for chunk in base_text.split("\n\n"):
         chunk = chunk.strip()
         if not chunk:
             continue
         chunk = chunk.replace(
-            "\\n<|assistant|>",
-            "\\n<|context|>No verified memory facts were retrieved.\\n<|assistant|>",
+            "\n<|assistant|>",
+            "\n<|context|>No verified memory facts were retrieved.\n<|assistant|>",
         )
-        documents.append(f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\\n{chunk}\\n<|end|>")
+        documents.append(f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\n{chunk}\n<|end|>")
 
     grouped: dict[tuple[int, int], list[dict[str, Any]]] = {}
     for fact in data["facts"]:
@@ -429,20 +429,20 @@ def build_language_documents(data: dict[str, Any], seed: int) -> list[str]:
         answer = _natural_fact_answer(group)
         for template in QUESTION_TEMPLATES[relation]:
             documents.append(
-                f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\\n"
-                f"<|user|> {template.format(s=subject)}\\n"
-                f"<|context|> {context}\\n"
-                f"<|assistant|> {answer}\\n<|end|>"
+                f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\n"
+                f"<|user|> {template.format(s=subject)}\n"
+                f"<|context|> {context}\n"
+                f"<|assistant|> {answer}\n<|end|>"
             )
     documents.extend([
-        f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\\n"
-        "<|user|> What is a flibbertigibbet?\\n"
-        "<|context|> No verified memory facts were retrieved.\\n"
-        "<|assistant|> I do not have enough information about that term to give a reliable definition.\\n<|end|>",
-        f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\\n"
-        "<|user|> Can you answer every possible question?\\n"
-        "<|context|> No verified memory facts were retrieved.\\n"
-        "<|assistant|> No. I have limited knowledge and can make mistakes. I should say when I am unsure instead of presenting a guess as a fact.\\n<|end|>",
+        f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\n"
+        "<|user|> What is a flibbertigibbet?\n"
+        "<|context|> No verified memory facts were retrieved.\n"
+        "<|assistant|> I do not have enough information about that term to give a reliable definition.\n<|end|>",
+        f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\n"
+        "<|user|> Can you answer every possible question?\n"
+        "<|context|> No verified memory facts were retrieved.\n"
+        "<|assistant|> No. I have limited knowledge and can make mistakes. I should say when I am unsure instead of presenting a guess as a fact.\n<|end|>",
     ])
     random.Random(seed).shuffle(documents)
     return documents
@@ -631,9 +631,9 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
     torch.manual_seed(args.seed + 991)
     for prompt in evaluation_prompts:
         formatted = (
-            f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\\n"
-            f"<|user|> {prompt}\\n"
-            "<|context|> No verified memory facts were retrieved.\\n"
+            f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\n"
+            f"<|user|> {prompt}\n"
+            "<|context|> No verified memory facts were retrieved.\n"
             "<|assistant|>"
         )
         answer = model.generate(
