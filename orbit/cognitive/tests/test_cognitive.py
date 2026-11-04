@@ -142,10 +142,10 @@ class CognitiveDataTests(unittest.TestCase):
             return {
                 "prompt_id": f"{split}-{index}",
                 "messages": [
-                    {"role": "user", "content": f"Question number {index} in {split}."},
-                    {"role": "assistant", "content": f"First reply number {index}."},
-                    {"role": "user", "content": f"Follow-up number {index}."},
-                    {"role": "assistant", "content": f"Second reply number {index}."},
+                    {"role": "user", "content": f"Question number {index} in {split}-{index}."},
+                    {"role": "assistant", "content": f"First reply {split}-{index}."},
+                    {"role": "user", "content": f"Follow-up {split}-{index}."},
+                    {"role": "assistant", "content": f"Second reply {split}-{index}."},
                 ],
             }
         train_rows = [make_row(index, "train") for index in range(30)]
