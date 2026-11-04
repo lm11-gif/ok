@@ -1,0 +1,187 @@
+name: Train ORBIT Cognitive v1 on Kaggle GPU
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "orbit/cognitive/START_TRAINING.txt"
+permissions:
+  contents: write
+concurrency:
+  group: orbit-cognitive-v1-kaggle
+  cancel-in-progress: false
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Check Python syntax
+        run: python -m py_compile orbit/cognitive/core.py orbit/cognitive/models.py orbit/cognitive/train.py
+      - name: Validate Kaggle credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${KAGGLE_API_TOKEN:-}" || -z "${KAGGLE_USERNAME:-}" ]]; then
+            echo "::error::Add KAGGLE_API_TOKEN and KAGGLE_USERNAME in repository Actions secrets."
+            exit 1
+          fi
+      - name: Install Kaggle CLI
+        run: |
+          python -m pip install --upgrade kaggle
+          kaggle --version
+      - name: Prepare private Kaggle GPU kernel
+        shell: bash
+        run: |
+          set -euo pipefail
+          KERNEL_DIR="$RUNNER_TEMP/orbit-cognitive-kernel"
+          mkdir -p "$KERNEL_DIR"
+          cp orbit/cognitive/core.py orbit/cognitive/models.py orbit/cognitive/train.py "$KERNEL_DIR/"
+          cat > "$KERNEL_DIR/kernel-metadata.json" <<EOF
+          {
+            "id": "$KAGGLE_USERNAME/orbit-cognitive-v1-gpu-training",
+            "title": "ORBIT Cognitive v1 GPU Training",
+            "code_file": "train.py",
+            "language": "python",
+            "kernel_type": "script",
+            "is_private": "true",
+            "enable_gpu": "true",
+            "enable_internet": "false",
+            "machine_shape": "NvidiaTeslaT4",
+            "dataset_sources": [],
+            "competition_sources": [],
+            "kernel_sources": [],
+            "model_sources": []
+          }
+          EOF
+          echo "KERNEL_DIR=$KERNEL_DIR" >> "$GITHUB_ENV"
+      - name: Submit training to Kaggle
+        shell: bash
+        run: |
+          set -euo pipefail
+          kaggle kernels push -p "$KERNEL_DIR" --timeout 43200 --accelerator NvidiaTeslaT4
+          kaggle kernels list --mine --search "ORBIT Cognitive v1 GPU Training" --format json \
+            > "$RUNNER_TEMP/orbit-cognitive-kernels.json"
+          KERNEL_ID="$(python - "$RUNNER_TEMP/orbit-cognitive-kernels.json" <<'PY'
+          import json, sys
+          rows = json.load(open(sys.argv[1], encoding="utf-8"))
+          matches = [row for row in rows if row.get("title") == "ORBIT Cognitive v1 GPU Training"]
+          if len(matches) != 1:
+              raise SystemExit("Expected exactly one matching Kaggle kernel; found " +
+                               repr([row.get("ref") for row in matches]))
+          print(matches[0]["ref"])
+          PY
+          )"
+          echo "KERNEL_ID=$KERNEL_ID" >> "$GITHUB_ENV"
+          echo "Using canonical Kaggle kernel: $KERNEL_ID"
+      - name: Wait for Kaggle training
+        shell: bash
+        run: |
+          set -euo pipefail
+          completed=0
+          for attempt in $(seq 1 320); do
+            if ! status="$(kaggle kernels status "$KERNEL_ID" 2>&1)"; then
+              echo "$status"
+              echo "::error::Could not read Kaggle kernel status."
+              exit 1
+            fi
+            echo "$status"
+            if echo "$status" | grep -Eiq 'complete|completed|succeeded|finished'; then
+              completed=1
+              break
+            fi
+            if echo "$status" | grep -Eiq 'error|failed|cancelled|canceled'; then
+              echo "::error::Kaggle reported a training failure."
+              kaggle kernels logs "$KERNEL_ID" || true
+              exit 1
+            fi
+            sleep 60
+          done
+          if (( completed == 0 )); then
+            echo "::error::Timed out waiting for Kaggle training."
+            exit 1
+          fi
+      - name: Download and validate model archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/orbit-cognitive-output" "$RUNNER_TEMP/orbit-cognitive-extracted"
+          kaggle kernels output "$KERNEL_ID" -p "$RUNNER_TEMP/orbit-cognitive-output" --force
+          ARCHIVE="$(find "$RUNNER_TEMP/orbit-cognitive-output" -type f -name 'orbit-cognitive-v1.zip' -print -quit)"
+          if [[ -z "$ARCHIVE" || ! -s "$ARCHIVE" ]]; then
+            echo "::error::Kaggle output did not contain orbit-cognitive-v1.zip."
+            find "$RUNNER_TEMP/orbit-cognitive-output" -maxdepth 5 -type f -printf '%p (%s bytes)\n'
+            exit 1
+          fi
+          python -m zipfile -e "$ARCHIVE" "$RUNNER_TEMP/orbit-cognitive-extracted"
+          for file in perception.pt association.pt memory.pt config.json training_report.json vocab.json facts.json; do
+            test -s "$RUNNER_TEMP/orbit-cognitive-extracted/$file"
+          done
+          python - "$RUNNER_TEMP/orbit-cognitive-extracted/training_report.json" <<'PY'
+          import json, sys
+          report = json.load(open(sys.argv[1], encoding="utf-8"))
+          if report.get("all_students_randomly_initialised") is not True:
+              raise SystemExit("Checkpoint lineage validation failed.")
+          if report.get("teacher_weights_loaded") is not False:
+              raise SystemExit("Unexpected teacher weights in student training.")
+          if report.get("status") != "trained":
+              raise SystemExit("Kaggle output is not a full training run.")
+          print(json.dumps(report, indent=2))
+          PY
+          echo "ORBIT_COGNITIVE_ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+          echo "ORBIT_COGNITIVE_EXTRACTED=$RUNNER_TEMP/orbit-cognitive-extracted" >> "$GITHUB_ENV"
+          sha256sum "$ARCHIVE"
+      - name: Upload durable workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: orbit-cognitive-v1-training-${{ github.run_id }}
+          path: |
+            ${{ env.ORBIT_COGNITIVE_ARCHIVE }}
+            ${{ env.ORBIT_COGNITIVE_EXTRACTED }}/training_report.json
+            ${{ env.ORBIT_COGNITIVE_EXTRACTED }}/config.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish versioned model release
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="orbit-cognitive-v1"
+          NOTES="$RUNNER_TEMP/orbit-cognitive-release-notes.md"
+          cat > "$NOTES" <<'EOF'
+          ORBIT Cognitive v1 is an experimental, GPU-trained multi-network prototype.
+          PerceptionNet, AssociationNet, and MemoryNet are randomly initialised.
+          The release contains all specialist checkpoints, the seed fact graph,
+          vocabularies, configuration, and training/evaluation report.
+          It is not a general-purpose assistant.
+          EOF
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ORBIT_COGNITIVE_ARCHIVE" \
+              "$ORBIT_COGNITIVE_EXTRACTED/training_report.json" \
+              "$ORBIT_COGNITIVE_EXTRACTED/config.json" \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" "$ORBIT_COGNITIVE_ARCHIVE" \
+              "$ORBIT_COGNITIVE_EXTRACTED/training_report.json" \
+              "$ORBIT_COGNITIVE_EXTRACTED/config.json" \
+              --repo "$GITHUB_REPOSITORY" --title "ORBIT Cognitive v1" \
+              --notes-file "$NOTES" --target main
+          fi
+      - name: Publish training summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## ORBIT Cognitive v1 GPU Training"
+            echo ""
+            echo "Kaggle kernel: ${KERNEL_ID:-not submitted}"
+            if [[ -n "${ORBIT_COGNITIVE_EXTRACTED:-}" && -f "$ORBIT_COGNITIVE_EXTRACTED/training_report.json" ]]; then
+              echo ""
+              cat "$ORBIT_COGNITIVE_EXTRACTED/training_report.json"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
