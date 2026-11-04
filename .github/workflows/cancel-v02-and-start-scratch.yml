@@ -40,8 +40,27 @@ jobs:
           api.authenticate()
           request = ApiCancelKernelSessionRequest()
           request.kernel_session_id = session_id
-          with api.build_kaggle_client() as client:
-              client.kernels.kernels_api_client.cancel_kernel_session(request)
+          import requests
+          import os
+          try:
+              with api.build_kaggle_client() as client:
+                  client.kernels.kernels_api_client.cancel_kernel_session(request)
+              print(f"SDK cancellation request accepted for session {session_id}.")
+          except requests.HTTPError as exc:
+              response = exc.response
+              print(
+                  "SDK cancellation response:",
+                  response.status_code if response is not None else "unknown",
+                  (response.text[:2000] if response is not None else str(exc)),
+              )
+              token = os.environ["KAGGLE_API_TOKEN"]
+              legacy = requests.post(
+                  f"https://www.kaggle.com/api/v1/kernels/cancel-session/{session_id}",
+                  headers={"Authorization": f"Bearer {token}"},
+                  timeout=45,
+              )
+              print("Legacy cancellation response:", legacy.status_code, legacy.text[:2000])
+              legacy.raise_for_status()
           print(f"Cancellation request accepted by Kaggle for session {session_id}.")
           PY
 
