@@ -1336,7 +1336,7 @@ def write_runtime_package(output: Path) -> list[str]:
         "=================================================\n\n"
         "This archive contains trained checkpoints, the neural language generator, "
         "configuration, fact memory, and the Python files needed to run the model.\n\n"
-        "Training data attribution and licences are listed in DATA_SOURCES.txt.\n\n"
+        "Training data attribution and licences for OASST1, English Daily Dialogues 10K and UltraChat 200k are listed in DATA_SOURCES.txt.\n\n"
         "Requirements: Python 3.10 or newer, PyTorch, and NumPy. Dependencies are "
         "not installed automatically. Use the Python environment where you already "
         "installed PyTorch and NumPy.\n\n"
@@ -1348,7 +1348,7 @@ def write_runtime_package(output: Path) -> list[str]:
         encoding="utf-8",
     )
     (output / "DATA_SOURCES.txt").write_text(
-        "ORBIT Cognitive v2.2 training data sources\n"
+        "ORBIT Cognitive v2.3 training data sources\n"
         "==========================================\n\n"
         "OpenAssistant OASST1\n"
         "Licence: Apache-2.0\n"
@@ -1361,6 +1361,11 @@ def write_runtime_package(output: Path) -> list[str]:
         "Dataset: https://huggingface.co/datasets/3nesdeniz/english-daily-dialogues-10k\n"
         "Pinned revision: 97e96d244d20c8970ac5be707cb89e5f94253357\n"
         "Synthetic multi-turn dialogues; health/wellness and shopping/errands domains are excluded.\n\n"
+        "UltraChat 200k (HuggingFaceH4)\n"
+        "Licence: MIT\n"
+        "Dataset: https://huggingface.co/datasets/HuggingFaceH4/ultrachat_200k\n"
+        "Pinned revision: b9df0fe0b62ba1c0467237161aae4cb6626c3745\n"
+        "A seeded sample of up to 25,000 conversations is drawn from train_sft/0000.parquet; test_sft/0000.parquet is held out.\n\n"
         "The exact downloaded split checksums and row counts are recorded in training_report.json.\n"
         "ORBIT student model weights are randomly initialised; no pretrained model weights are loaded.\n",
         encoding="utf-8",
