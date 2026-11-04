@@ -1,8 +1,8 @@
-GPU training requested on 2026-11-04 after v2.2 conversational CI passed on main.
-Submit the dedicated Kaggle T4 kernel: dud12345/orbit-cognitive-v2-2-gpu-training.
-Train all four student networks from random initialisation. Do not load pretrained model weights.
-For the language generator, use assistant-only causal next-token loss with document-local windows that always include assistant targets. Include multi-turn histories in context. Train on the authored ORBIT corpus plus pinned English OpenAssistant OASST1 and English Daily Dialogues 10K datasets; download their pinned Parquet files inside Kaggle with internet enabled. Keep conversation-tree validation separate and keep the Daily Dialogues test split held out for generation evaluation.
-Record dataset licences, revisions, SHA256 checksums, row counts, filters, split details, assistant-target token counts, training metrics and generated answers beside held-out reference replies in training_report.json.
-Publish a separate orbit-cognitive-v2.2 release only after every training and archive-validation step succeeds. Preserve the v1, v2 and v2.1 releases and Kaggle kernels.
-
-Retry Kaggle status polling with the actual slug from the submitted notebook URL: dud12345/orbit-cognitive-v2-2-conversational-gpu-training. Preserve the v2.2 source and dataset configuration.
+GPU training requested on 2026-11-04 after ORBIT Cognitive v2.3 UltraChat candidate CI passed.
+Submit the dedicated Kaggle T4 kernel: dud12345/orbit-cognitive-v2-3-ultrachat-gpu-training.
+Train PerceptionNet, AssociationNet, MemoryNet and NeuralLanguageGenerator from random initialisation. Do not load pretrained model weights, hidden states or pretrained tokenizers.
+For the language generator, use the authored ORBIT examples plus pinned English OpenAssistant OASST1, English Daily Dialogues 10K, and a seeded sample of up to 25,000 conversations from UltraChat 200k. Download the pinned Parquet files with Kaggle internet enabled. Preserve separate conversation-level validation and the distinct Daily Dialogues and UltraChat test splits.
+Use the two-stage language objective: transcript-level next-token warmup followed by assistant-response-only fine-tuning. Keep training windows document-local and ensure each batch has assistant targets.
+Train with the v2.3 defaults: 256 model dimensions, 8 decoder layers, 8 heads, 512-token context, 8192 vocabulary, batch size 16 and 30 epochs with validation-based checkpoint selection.
+Record dataset licences, revisions, SHA256 checksums, row counts, filters, split details, assistant-target token counts, training metrics, held-out generated replies with their references, and true autoregressive multi-turn rollouts where generated replies are fed into subsequent turns.
+Build orbit-cognitive-v2.3.zip and include DATA_SOURCES.txt. Validate all checkpoints and runtime files before publishing only the prerelease tag orbit-cognitive-v2.3-rc1. Do not create a stable release or overwrite v1, v2, v2.1 or v2.2.
