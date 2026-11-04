@@ -5,7 +5,7 @@ from orbit.cognitive.models import PerceptionNet, AssociationNet, MemoryNet
 from orbit.cognitive.language import VocabularyTokenizer, NeuralLanguageGenerator
 from orbit.cognitive.train import assistant_target_mask, _format_daily_dialogue, _normalise_ultrachat_messages, _load_ultrachat_dialogues, _generate_conversation_rollouts, _language_batch, _masked_language_loss
 from unittest.mock import patch
-from orbit.cognitive.chat import entity_aliases, find_mentioned_entities, relation_hint, compose_is_a, canonical_relation_query
+from orbit.cognitive.chat import entity_aliases, find_mentioned_entities, relation_hint, compose_is_a, canonical_relation_query, build_conversation_prompt
 
 class CognitiveDataTests(unittest.TestCase):
     def test_seed_data_is_nonempty_and_split(self):
@@ -92,6 +92,50 @@ class CognitiveDataTests(unittest.TestCase):
         self.assertEqual(compose_is_a("computer", "electronic device"), "computer is an electronic device.")
         self.assertEqual(compose_is_a("desk", "furniture"), "desk is furniture.")
 
+
+    def test_runtime_prompt_keeps_system_latest_message_and_whole_recent_turns(self):
+        examples = [
+            "<|system|>You are ORBIT. "
+            "<|user|> older question marker. <|context|> older context marker. "
+            "<|assistant|> older reply marker. "
+            "<|user|> latest question marker. <|context|> latest context marker. "
+            "<|assistant|>"
+        ] * 5
+        tokenizer = VocabularyTokenizer.build(examples, max_vocab=1024, min_frequency=1)
+        history = [
+            (f"old question {index} " + "details " * 10,
+             f"old answer {index} " + "explanation " * 10,
+             f"old context {index}")
+            for index in range(8)
+        ]
+        prompt = build_conversation_prompt(
+            "LATEST_USER_MARKER what should I do next?",
+            "LATEST_CONTEXT_MARKER",
+            history,
+            tokenizer,
+            block_size=180,
+            system_prompt="You are ORBIT. Be helpful.",
+        )
+        self.assertLessEqual(len(tokenizer.encode(prompt)), 180)
+        self.assertIn("<|system|>", prompt)
+        self.assertIn("LATEST_USER_MARKER", prompt)
+        self.assertIn("LATEST_CONTEXT_MARKER", prompt)
+        self.assertIn("<|assistant|>", prompt)
+        self.assertNotIn("old question 0", prompt)
+        self.assertNotIn("old answer 0", prompt)
+
+    def test_runtime_prompt_rejects_current_question_larger_than_context(self):
+        examples = ["<|system|>You are ORBIT. <|user|> hello <|context|> facts <|assistant|>"] * 4
+        tokenizer = VocabularyTokenizer.build(examples, max_vocab=512, min_frequency=1)
+        with self.assertRaises(ValueError):
+            build_conversation_prompt(
+                "word " * 100,
+                "No retrieved facts.",
+                [],
+                tokenizer,
+                block_size=8,
+                system_prompt="You are ORBIT.",
+            )
 
     def test_conversation_rollout_uses_generated_reply_in_follow_up_history(self):
         class FakeGenerator:
