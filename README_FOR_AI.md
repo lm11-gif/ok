@@ -334,7 +334,7 @@ When resuming work:
 3. Try to recover the existing v0.3 Kaggle output/report and checkpoint before considering another GPU run. The last GitHub job downloaded these files but failed only when pushing the report commit; do not waste GPU quota by blindly retraining.
 4. Inspect the recovered `training_report.json`, `config.json`, `pretraining_log.json`, and checkpoint set. Verify actual tokens/steps, validation trend, SFT stage counts/loss, exact parameter count, tokenizer size, and file integrity. Do not infer these from the Kaggle `COMPLETE` status alone.
 5. Do not run v0.3 DPO until the scratch checkpoint has been recovered, validated, and published through a durable release or other controlled artifact path.
-6. For the proposed Cognitive v1 direction, begin with a CPU-friendly typed fact store, provenance, working memory, and deterministic coordinator. Then add only two or three small specialist neural networks with measurable objectives. Do not immediately build a pile of six networks or start new Kaggle training.
+6. For Cognitive v1, build and unit-test the typed fact store, provenance, working memory, dataset pipeline, and controller on CPU, but train every specialist neural network on a Kaggle GPU. The first GPU-trained specialists should be PerceptionNet, AssociationNet, and MemoryNet, all randomly initialised. Do not start a Kaggle job until the datasets, trainer, validation script, and checkpoint/artifact recovery path are ready.
 7. Build a held-out question set covering basic definitions, paraphrases, related concepts, multi-step questions, unknown facts, and contradictions. Track factual accuracy, evidence coverage, unsupported claims, abstention, latency, and memory use.
 8. Keep v0.3 as a separate baseline; do not delete it or silently combine its weights with the cognitive modules. Keep all design and implementation updates in GitHub.
 9. If a failure occurs, report the exact failing step and actual traceback. Fix it and verify before resubmitting. Avoid wasting Kaggle GPU quota on repeated unverified submissions.
@@ -362,6 +362,12 @@ Important design principles:
 - Use small specialist networks for distinct learned tasks, not several chatbots exchanging unstructured paragraphs.
 - Coordinate modules through a typed shared workspace and a deterministic controller.
 - Keep memory, provenance, rule application, task scheduling, and consistency checks inspectable in ordinary code at first.
-- Start with two or three neural modules (e.g. question encoder, association/retrieval model, then an evaluator), not a large collection.
+- Train the neural specialists on Kaggle GPU, not CPU. CPU may be used for tests, dataset inspection, and lightweight inference only.
+- First three GPU-trained, randomly initialised specialists: PerceptionNet (question-to-structure encoder), AssociationNet (concept-link prediction), and MemoryNet (query-to-record retrieval/ranking). Add ControlNet and a learned evaluator only after these three prove useful.
+- Give the modules shared concept IDs, relation schema, and typed interfaces. Train specialists against separate objectives first, then integrate and optionally joint-tune them while preserving per-module validation metrics.
+- Record actual GPU model, CUDA/PyTorch versions, VRAM, data fingerprints, random seeds, per-stage metrics, and checkpoints.
+- Verify CUDA availability before any training epoch. Use mixed precision only where supported, checkpoint every stage, and never silently fall back to CPU training.
+- Upload checkpoint artifacts or a release before attempting documentation commits. The v0.3 run demonstrated why a failed Git push must not destroy the only copy of trained weights.
+- Use one Kaggle GPU job at a time. Do not spend GPU quota until data generation, training, validation, and checkpoint recovery have passed CPU-side tests.
 - Prefer template-based answer composition initially so reasoning/retrieval can be tested separately from fluent language generation.
-- Preserve ORBIT Seed v0.3 as a separate scratch-LM experiment/baseline. Cognitive v1 is a proposal, not implemented code yet.
+- Preserve ORBIT Seed v0.3 as a separate scratch-LM experiment/baseline. Cognitive v1 is still a proposal; no specialist networks have been implemented or trained yet.
