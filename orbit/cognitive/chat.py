@@ -17,9 +17,11 @@ except ImportError:
     from language import VocabularyTokenizer, NeuralLanguageGenerator
 
 LANGUAGE_SYSTEM_PROMPT = (
-    "You are ORBIT, an experimental AI assistant. Respond naturally and directly. "
-    "Use retrieved memory facts as evidence, but do not claim that memory is complete. "
-    "When evidence is missing, be honest rather than inventing a factual answer."
+    "You are ORBIT, a helpful conversational assistant. Speak naturally and clearly. "
+    "Answer the latest message directly, use earlier conversation turns to maintain context, "
+    "and avoid repeating yourself. Keep a friendly, concise tone. "
+    "Use retrieved memory facts as evidence, but do not claim memory is complete. "
+    "When you are unsure, say so instead of inventing details."
 )
 RELATION_CUES = [
     ("falls_from", ("falls from", "fall from", "descends from")),
@@ -152,7 +154,7 @@ class OrbitCognitive:
         load_checkpoint(model_dir / "generator.pt", self.generator, self.device)
         self.max_new_tokens = max(1, int(max_new_tokens))
         self.temperature = float(temperature)
-        self.history: list[tuple[str, str]] = []
+        self.history: list[tuple[str, str, str]] = []
         fact_ids = encode_facts(self.facts, self.vocab, int(self.config["max_length"]))
         self.fact_tokens = torch.as_tensor(fact_ids, dtype=torch.long, device=self.device)
         self.fact_subject_ids = [fact["subject_id"] for fact in self.facts]
@@ -234,8 +236,8 @@ class OrbitCognitive:
             if facts else "No verified memory facts were retrieved."
         )
         history_text = "".join(
-            f"<|user|> {old_question}\n<|context|> No verified memory facts were retrieved.\n<|assistant|> {old_answer}\n"
-            for old_question, old_answer in self.history[-4:]
+            f"<|user|> {old_question}\n<|context|> {old_context}\n<|assistant|> {old_answer}\n"
+            for old_question, old_answer, old_context in self.history[-6:]
         )
         prompt = (
             f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\n{history_text}"
@@ -248,8 +250,8 @@ class OrbitCognitive:
         )
         if not response:
             response = "I do not have enough information to give a useful answer yet."
-        self.history.append((question, response))
-        self.history = self.history[-6:]
+        self.history.append((question, response, context))
+        self.history = self.history[-8:]
         return response
 
     def reset_conversation(self):
@@ -258,17 +260,17 @@ class OrbitCognitive:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", default="artifacts/orbit-cognitive-v2.1")
+    parser.add_argument("--model", default="artifacts/orbit-cognitive-v2.2")
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--max-new-tokens", type=int, default=160)
-    parser.add_argument("--temperature", type=float, default=0.72)
+    parser.add_argument("--temperature", type=float, default=0.62)
     args = parser.parse_args()
     bot = OrbitCognitive(
         Path(args.model), args.device,
         max_new_tokens=args.max_new_tokens, temperature=args.temperature,
     )
     parameters = sum(p.numel() for p in bot.generator.parameters())
-    print(f"ORBIT Cognitive v2.1 | neural subword generator | {parameters:,} generator parameters")
+    print(f"ORBIT Cognitive v2.2 | conversational neural generator | {parameters:,} generator parameters")
     print("Type /reset to clear conversation history, or /exit to quit.")
     while True:
         try:
