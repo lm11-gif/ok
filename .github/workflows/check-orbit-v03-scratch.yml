@@ -1,0 +1,20 @@
+name: Check ORBIT v0.3 Scratch scripts
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "orbit/seed_model_v0.3_scratch/train_scratch.py"
+      - "orbit/seed_model_v0.3_scratch/chat.py"
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out ORBIT
+        uses: actions/checkout@v4
+      - name: Compile scratch scripts
+        run: python -m py_compile orbit/seed_model_v0.3_scratch/train_scratch.py orbit/seed_model_v0.3_scratch/chat.py
