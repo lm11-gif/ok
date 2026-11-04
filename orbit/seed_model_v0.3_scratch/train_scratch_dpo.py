@@ -53,6 +53,7 @@ SCRATCH_RELEASE_URL = (
 TEACHER_MODEL = "HuggingFaceTB/SmolLM3-3B"
 SEED = 20261104
 # The reference is a frozen copy of the scratch-trained policy before DPO.
+# Reference policy is a frozen copy of this scratch-trained ORBIT checkpoint.
 BETA = 0.1
 DPO_EPOCHS = 2
 LEARNING_RATE = 1.0e-5
