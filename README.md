@@ -9,7 +9,7 @@ separate ORBIT Seed model experiments.
 - [ORBIT Seed v0.1](orbit/seed_model/README.md) — the original 871k-parameter model trained from random initialization. It is an educational prototype and is not yet a coherent general-purpose assistant.
 - [ORBIT Seed v0.2](orbit/seed_model_v0.2/README.md) — a separate conversational model fine-tuned from pretrained SmolLM2-360M. This version is **not** scratch-trained.
 - [ORBIT Seed v0.3 Scratch](orbit/seed_model_v0.3_scratch/README.md) — a separate model with random student-weight initialization, its own tokenizer, FineWeb-Edu pretraining, assistant tuning, and a scratch-specific teacher DPO stage.
-- [ORBIT Cognitive v1 proposal](orbit/cognitive/COGNITIVE_ARCHITECTURE.md) — proposed modular architecture using multiple small specialist networks, shared memory, a controlled reasoning loop, and evidence-based answer checks. Design only; not yet implemented.
+- [ORBIT Cognitive v1 proposal](orbit/cognitive/COGNITIVE_ARCHITECTURE.md) — proposed modular architecture using multiple randomly initialised specialist networks trained on Kaggle GPU, shared memory, a controlled reasoning loop, and evidence-based answer checks. Design only; not yet implemented or trained.
 
 ## Model lineage
 
