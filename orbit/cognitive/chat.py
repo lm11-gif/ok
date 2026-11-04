@@ -6,10 +6,10 @@ from pathlib import Path
 import torch
 
 try:
-    from .core import encode_text, encode_facts
+    from .core import encode_text, encode_facts, QUESTION_TEMPLATES
     from .models import PerceptionNet, AssociationNet, MemoryNet
 except ImportError:
-    from core import encode_text, encode_facts
+    from core import encode_text, encode_facts, QUESTION_TEMPLATES
     from models import PerceptionNet, AssociationNet, MemoryNet
 
 ANSWER_FORMS = {
@@ -77,6 +77,14 @@ def find_mentioned_entities(question: str, entities: list[str]) -> list[int]:
                 matches.append(idx)
                 break
     return matches
+
+def canonical_relation_query(subject: str, relation: str) -> str:
+    """Map a parsed subject/relation frame to a training-style retrieval query."""
+    templates = QUESTION_TEMPLATES.get(relation)
+    if not templates:
+        raise ValueError(f"Unsupported relation for canonical retrieval: {relation}")
+    return templates[0].format(s=subject.replace("_", " "))
+
 
 def relation_hint(question: str, relations: list[str]) -> str | None:
     """Use explicit wording as a symbolic routing hint; neural perception remains the fallback."""
@@ -163,6 +171,7 @@ class OrbitCognitive:
         predicted_relation_id = int(relation_probs.argmax().item())
         predicted_relation_conf = float(relation_probs[predicted_relation_id].item())
         hinted_relation = relation_hint(question, self.relations)
+        used_relation_hint = hinted_relation is not None
         if hinted_relation is not None:
             relation_id = self.relations.index(hinted_relation)
             relation_conf = 1.0
@@ -200,6 +209,23 @@ class OrbitCognitive:
 
         ranked_ids = sorted(candidate_ids, key=combined_score, reverse=True)
         best_similarity = float(scores[ranked_ids[0]].item()) * float(self.memory.temperature)
+
+        # A user can express a relation in a way that the memory encoder did
+        # not see during training. When the parser has an explicit relation
+        # cue, retry retrieval with the matching training-style canonical form.
+        if best_similarity < 0.12 and used_relation_hint:
+            subject_text = self.entities[subject_id].replace("_", " ")
+            canonical_text = canonical_relation_query(subject_text, self.relations[relation_id])
+            canonical_ids = encode_text(
+                canonical_text, self.vocab, int(self.config["max_length"])
+            )
+            canonical_x = torch.as_tensor(
+                canonical_ids[None, :], dtype=torch.long, device=self.device
+            )
+            scores = self.memory(canonical_x, self.fact_tokens)[0]
+            ranked_ids = sorted(candidate_ids, key=combined_score, reverse=True)
+            best_similarity = float(scores[ranked_ids[0]].item()) * float(self.memory.temperature)
+
         if best_similarity < 0.12 or subject_conf < 0.05:
             return (
                 f"I recognise {self.entities[subject_id].replace('_', ' ')}, "
