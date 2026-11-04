@@ -1,6 +1,6 @@
-GPU training requested on 2026-11-04 after the ORBIT Cognitive v2.1 CI checks pass.
-Submit a separate Kaggle GPU kernel: dud12345/orbit-cognitive-v2-1-gpu-training.
-Train the randomly initialised PerceptionNet, AssociationNet, MemoryNet and the new word-piece NeuralLanguageGenerator. Keep complete dialogue documents isolated when sampling token windows. Use the learned vocabulary with UTF-8 byte fallback, and retain held-out generation samples in training_report.json.
-Publish a separate orbit-cognitive-v2.1 release containing generator.pt, tokenizer.json, config.json, all specialist checkpoints, source files, README.txt and run_orbit.bat. Do not overwrite the existing v2 or v1 releases or kernels. Use the shared Kaggle GPU concurrency group.
-
-Retrigger v2.1 GPU training after successful CI run 41775996730 (commit 69cdc491e0d66d7534d5211ccbcc9a261b9d726f). Submit the corrected v2.1 script to the existing v2-1 Kaggle kernel; preserve prior releases.
+GPU training requested on 2026-11-04 after v2.2 conversational CI passed on main.
+Submit the dedicated Kaggle T4 kernel: dud12345/orbit-cognitive-v2-2-gpu-training.
+Train all four student networks from random initialisation. Do not load pretrained model weights.
+For the language generator, use assistant-only causal next-token loss with document-local windows that always include assistant targets. Include multi-turn histories in context. Train on the authored ORBIT corpus plus pinned English OpenAssistant OASST1 and English Daily Dialogues 10K datasets; download their pinned Parquet files inside Kaggle with internet enabled. Keep conversation-tree validation separate and keep the Daily Dialogues test split held out for generation evaluation.
+Record dataset licences, revisions, SHA256 checksums, row counts, filters, split details, assistant-target token counts, training metrics and generated answers beside held-out reference replies in training_report.json.
+Publish a separate orbit-cognitive-v2.2 release only after every training and archive-validation step succeeds. Preserve the v1, v2 and v2.1 releases and Kaggle kernels.
