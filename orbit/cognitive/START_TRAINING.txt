@@ -1,3 +1,4 @@
-GPU training requested on 2026-11-04 after ORBIT Cognitive v2 CPU CI run 41769738013 passed.
-Submit the separate canonical Kaggle kernel dud12345/orbit-cognitive-v2-gpu-training.
-This run trains PerceptionNet, AssociationNet, MemoryNet, and the randomly initialised NeuralLanguageGenerator. The generator uses causal next-byte cross-entropy on the repository's locally authored synthetic multi-turn conversation corpus plus fact-grounded examples. The resulting v2 ZIP must include generator.pt, config and fact data, chat.py, core.py, models.py, requirements.txt, README.txt, and run_orbit.bat. Keep the v1 release and kernel intact. Use the shared GPU concurrency group and do not overlap ORBIT Kaggle training jobs.
+GPU training requested on 2026-11-04 after the ORBIT Cognitive v2.1 CI checks pass.
+Submit a separate Kaggle GPU kernel: dud12345/orbit-cognitive-v2-1-gpu-training.
+Train the randomly initialised PerceptionNet, AssociationNet, MemoryNet and the new word-piece NeuralLanguageGenerator. Keep complete dialogue documents isolated when sampling token windows. Use the learned vocabulary with UTF-8 byte fallback, and retain held-out generation samples in training_report.json.
+Publish a separate orbit-cognitive-v2.1 release containing generator.pt, tokenizer.json, config.json, all specialist checkpoints, source files, README.txt and run_orbit.bat. Do not overwrite the existing v2 or v1 releases or kernels. Use the shared Kaggle GPU concurrency group.
