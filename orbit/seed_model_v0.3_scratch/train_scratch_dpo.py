@@ -46,6 +46,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from chat import OrbitScratchGPT
 
+# This stage only operates on a checkpoint created by the random-init scratch trainer.
 SCRATCH_RELEASE_URL = (
     "https://github.com/lm11-gif/ok/releases/download/"
     "orbit-seed-v0.3-scratch/orbit-seed-v0.3-scratch.zip"
