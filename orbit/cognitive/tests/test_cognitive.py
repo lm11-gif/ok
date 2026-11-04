@@ -3,7 +3,7 @@ import torch
 from orbit.cognitive.core import build_seed_data, encode_examples, encode_text
 from orbit.cognitive.models import PerceptionNet, AssociationNet, MemoryNet
 from orbit.cognitive.language import VocabularyTokenizer, NeuralLanguageGenerator
-from orbit.cognitive.train import assistant_target_mask, _masked_language_loss
+from orbit.cognitive.train import assistant_target_mask, _language_batch, _masked_language_loss
 from orbit.cognitive.chat import entity_aliases, find_mentioned_entities, relation_hint, compose_is_a, canonical_relation_query
 
 class CognitiveDataTests(unittest.TestCase):
@@ -116,6 +116,29 @@ class CognitiveDataTests(unittest.TestCase):
         self.assertTrue(bool(mask[user_positions[1]]))
         self.assertFalse(bool(mask[context_positions[0]]))
         self.assertGreater(int(mask.sum()), 5)
+
+    def test_language_batches_always_include_assistant_targets(self):
+        text = (
+            "<|system|>You are helpful. "
+            "<|user|> I need help with a project. "
+            "<|context|> No verified facts. "
+            "<|assistant|> Start with one small, testable step. "
+            "<|user|> What should I do next? "
+            "<|context|> No verified facts. "
+            "<|assistant|> Tell me which part is most confusing. <|end|>"
+        )
+        tokenizer = VocabularyTokenizer.build([text] * 4, max_vocab=1024, min_frequency=2)
+        ids = tokenizer.encode(text) + [tokenizer.EOS_ID]
+        sequence = torch.tensor(ids, dtype=torch.long)
+        mask = assistant_target_mask(ids, tokenizer)
+        inputs, targets, loss_masks = _language_batch(
+            [sequence], [mask], block_size=24, batch_size=8,
+            pad_id=tokenizer.PAD_ID, device=torch.device("cpu"),
+        )
+        self.assertEqual(tuple(inputs.shape), (8, 24))
+        self.assertEqual(tuple(targets.shape), (8, 24))
+        self.assertTrue(bool(loss_masks.any(dim=1).all()))
+        self.assertTrue(bool((targets[loss_masks] != tokenizer.PAD_ID).all()))
 
     def test_assistant_only_loss_is_finite(self):
         logits = torch.randn(2, 5, 20, requires_grad=True)
