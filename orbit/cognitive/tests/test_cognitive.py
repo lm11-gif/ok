@@ -1,7 +1,7 @@
 import unittest
 import torch
 from orbit.cognitive.core import build_seed_data, encode_examples, encode_text
-from orbit.cognitive.models import PerceptionNet, AssociationNet, MemoryNet
+from orbit.cognitive.models import PerceptionNet, AssociationNet, MemoryNet, NeuralLanguageGenerator
 from orbit.cognitive.chat import entity_aliases, find_mentioned_entities, relation_hint, compose_is_a, canonical_relation_query
 
 class CognitiveDataTests(unittest.TestCase):
@@ -103,6 +103,15 @@ class CognitiveDataTests(unittest.TestCase):
         memory = MemoryNet(len(data["vocab"]))
         logits = memory(x, x)
         self.assertEqual(tuple(logits.shape), (4, 4))
+
+    def test_neural_language_generator_shape_and_sampling(self):
+        config = {"block_size": 24, "dim": 32, "layers": 1, "heads": 2, "dropout": 0.0}
+        generator = NeuralLanguageGenerator(config)
+        tokens = torch.randint(0, NeuralLanguageGenerator.vocab_size, (2, 16))
+        logits = generator(tokens)
+        self.assertEqual(tuple(logits.shape), (2, 16, NeuralLanguageGenerator.vocab_size))
+        generated = generator.generate("<|assistant|>", max_new_tokens=12, temperature=0.0)
+        self.assertIsInstance(generated, str)
 
 if __name__ == "__main__":
     unittest.main()

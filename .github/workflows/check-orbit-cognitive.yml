@@ -1,4 +1,4 @@
-name: Check ORBIT Cognitive v1
+name: Check ORBIT Cognitive v2
 on:
   push:
     branches: [main]
@@ -47,13 +47,14 @@ jobs:
           from pathlib import Path
           from orbit.cognitive.chat import OrbitCognitive
           model = Path(os.environ["RUNNER_TEMP"]) / "orbit-cognitive-smoke"
-          bot = OrbitCognitive(model, device="cpu")
+          bot = OrbitCognitive(model, device="cpu", max_new_tokens=48, temperature=0.0)
           answer = bot.answer("What is rain?")
           unknown = bot.answer("What is flibbertigibbet?")
           assert isinstance(answer, str) and answer.strip()
-          assert "won't guess" in unknown
-          print("Known-concept response:", answer)
-          print("Unknown-concept response:", unknown)
+          assert isinstance(unknown, str) and unknown.strip()
+          assert len(bot.history) == 2
+          print("Generated known-concept response:", answer)
+          print("Generated unknown-concept response:", unknown)
           PY
       - name: Verify smoke-training archive
         run: |
@@ -63,11 +64,12 @@ jobs:
           path = os.path.join(os.environ["RUNNER_TEMP"], "orbit-cognitive-smoke.zip")
           with zipfile.ZipFile(path) as z:
               names = set(z.namelist())
-              required = {"perception.pt", "association.pt", "memory.pt", "config.json", "training_report.json"}
+              required = {"perception.pt", "association.pt", "memory.pt", "generator.pt", "config.json", "training_report.json"}
               missing = required - names
               if missing:
                   raise SystemExit(f"Missing smoke archive files: {sorted(missing)}")
               report = json.loads(z.read("training_report.json"))
               assert report["status"] == "smoke_test_only"
               assert report["all_students_randomly_initialised"] is True
+              assert report["config"]["language_generator"]["from_scratch"] is True
           PY

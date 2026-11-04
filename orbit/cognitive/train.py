@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train ORBIT Cognitive v1 specialist networks from random initialisation.
+"""Train ORBIT Cognitive v2 networks, including a scratch-initialised language generator.
 
 GPU is mandatory by default. Use --device cpu only for CI/smoke tests.
 All generated training examples are based on the versioned seed knowledge graph.
@@ -689,7 +689,7 @@ def main():
     config["language_generator"] = generator_config
     total_seconds = time.perf_counter() - start
     report = {
-        "project": "ORBIT Cognitive v1",
+        "project": "ORBIT Cognitive v2",
         "status": "smoke_test_only" if args.smoke else "trained",
         "all_students_randomly_initialised": True,
         "teacher_weights_loaded": False,
