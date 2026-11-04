@@ -1,0 +1,1 @@
+Run the GitHub Actions workflow "Train ORBIT Cognitive v1 on Kaggle GPU" manually after reviewing the workflow and training README.
