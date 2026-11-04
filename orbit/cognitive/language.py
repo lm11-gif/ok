@@ -72,9 +72,9 @@ class VocabularyTokenizer:
                 pieces.append(bytes(byte_buffer).decode("utf-8", errors="replace"))
                 byte_buffer.clear()
 
-        stop_tokens = {"<|end|>"}
+        stop_tokens = {"<|end|>", "<|context|>", "<|system|>"}
         if stop_at_chat_marker:
-            stop_tokens.update({"<|user|>", "<|assistant|>"})
+            stop_tokens.update({"<|user|>", "<|assistant|>", "<|context|>", "<|system|>"})
         for raw_id in token_ids:
             token_id = int(raw_id)
             if token_id == self.EOS_ID or token_id == self.PAD_ID:
@@ -222,13 +222,17 @@ class NeuralLanguageGenerator(nn.Module):
             tokenizer.token_id("<|end|>"),
             tokenizer.token_id("<|user|>"),
             tokenizer.token_id("<|assistant|>"),
+            tokenizer.token_id("<|context|>"),
+            tokenizer.token_id("<|system|>"),
         }
         stop_ids.discard(None)
         for step in range(max(1, int(max_new_tokens))):
             logits = self(tokens[:, -self.block_size:])[:, -1, :].float()[0]
             logits[self.pad_id] = float("-inf")
-            if step < 2:
+            if step < 3:
                 logits[self.eos_id] = float("-inf")
+                for stop_id in stop_ids:
+                    logits[stop_id] = float("-inf")
             if temperature <= 0:
                 next_id = int(torch.argmax(logits).item())
             else:
