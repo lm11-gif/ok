@@ -740,7 +740,6 @@ def main():
         {k: v.detach().cpu().contiguous().clone() for k, v in model.state_dict().items()},
         str(OUT / "model.safetensors"),
     )
-    shutil.copy2(OUT / "tokenizer.model", OUT / "tokenizer.model")
     report = {
         "name": "ORBIT Seed v0.3 Scratch",
         "from_scratch": True,
