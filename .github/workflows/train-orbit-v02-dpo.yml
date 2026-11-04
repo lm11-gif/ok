@@ -1,6 +1,10 @@
 name: Teacher-supervise ORBIT Seed v0.2 with DPO
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "orbit/seed_model_v0.2/train_dpo.py"
   workflow_run:
     workflows: ["Fine-tune ORBIT Seed v0.2 on Kaggle GPU"]
     types: [completed]
@@ -14,6 +18,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  syntax-check:
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out ORBIT
+        uses: actions/checkout@v4
+      - name: Compile the DPO training script
+        run: python -m py_compile orbit/seed_model_v0.2/train_dpo.py
+
   dpo:
     if: \${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
     runs-on: ubuntu-latest
