@@ -1,7 +1,7 @@
-name: Check ORBIT Cognitive v2.2 Conversational
+name: Check ORBIT Cognitive v2.3 Conversational
 on:
   push:
-    branches: [main]
+    branches: [main, orbit-v2.3-ultrachat]
     paths:
       - "orbit/cognitive/**"
       - ".github/workflows/check-orbit-cognitive.yml"
