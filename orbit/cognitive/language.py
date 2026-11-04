@@ -15,7 +15,7 @@ from torch import nn
 import torch.nn.functional as F
 
 TOKEN_PATTERN = re.compile(
-    r"<\\|[^>]+\\|>|[A-Za-z]+(?:['’][A-Za-z]+)?|\\d+(?:\\.\\d+)?|[^\\w\\s]|\\s+",
+    r"<\|[^>]+\|>|[A-Za-z]+(?:['’][A-Za-z]+)?|\d+(?:\.\d+)?|[^\w\s]|\s+",
     flags=re.UNICODE,
 )
 
