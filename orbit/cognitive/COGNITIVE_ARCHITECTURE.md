@@ -1,6 +1,6 @@
 # ORBIT Cognitive v1 — Multi-Network Architecture Proposal
 
-**Status:** Design proposal only. This document does not claim that the architecture has been implemented or trained.
+**Status:** Initial implementation is now committed in this directory. The three specialists and training workflow have not yet completed a GPU training run. See README.md for commands and current limitations.
 
 **Purpose:** Explore a different direction for ORBIT: several small, specialised neural networks cooperating through shared memory and a controlled reasoning loop, rather than asking one small autoregressive language model to do every task.
 
@@ -154,12 +154,20 @@ The user's sample outputs from ORBIT ("By choosing the snow that is rain", "I've
 
 Cognitive v1 should initially be developed independently of the v0.3 training pipeline. The v0.3 model could later be tested as an optional language-composition component, but its text-generation behaviour should not be allowed to invent or override facts in the structured memory.
 
-## 11. Immediate next steps
+## 11. Implementation status and next steps
 
-- Preserve v0.3 and recover/record its actual Kaggle training report if the Kaggle output is still accessible.
-- Build and test the memory store, typed workspace, controller, dataset generator, and recovery path on CPU.
-- Then train the randomly initialised specialist networks on Kaggle GPU, one controlled run at a time, with held-out metrics and resumable checkpoints.
-- Test the system on a fixed question set before deciding whether to expand it.
-- Keep each experiment, dataset, checkpoint, and training lineage documented in GitHub.
+The first implementation is committed:
 
-No new Kaggle training session is required for the initial cognitive-architecture prototype.
+- core.py: curated seed knowledge graph, vocabulary builder, and deterministic train/validation/test question generation.
+- models.py: randomly initialised PerceptionNet, AssociationNet, and MemoryNet.
+- train.py: GPU-first staged training, validation, timing, checkpointing, and model archive creation.
+- chat.py: inference controller combining perception, graph association, memory retrieval, and conservative template answers.
+- tests/test_cognitive.py: data and network-shape tests.
+- check-orbit-cognitive.yml: Python checks, unit tests, and a one-epoch CPU smoke run for CI only.
+- train-orbit-cognitive-kaggle.yml: manual Kaggle GPU training, output validation, Actions artifact upload, and release publication.
+
+Next steps:
+1. Wait for and inspect the CI run; fix every failing syntax, unit, or smoke-training check.
+2. Only after CI passes, manually trigger the Kaggle workflow. It uses the existing Kaggle Actions secrets and does not run on ordinary code pushes.
+3. Inspect actual GPU metrics and held-out test scores; do not equate GPU execution or synthetic-template accuracy with general intelligence.
+4. Preserve the v0.3 scratch experiment separately and continue trying to recover its completed Kaggle output without retraining.
