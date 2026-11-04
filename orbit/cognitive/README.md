@@ -1,39 +1,28 @@
-# ORBIT Cognitive v2.2 Conversational
+# ORBIT Cognitive v2.3 Conversational Candidate
 
-**v2.2 is an active scratch-trained conversational rebuild.** It is intended to replace the poorly coherent v2.1 generator, but it is not considered ready until its GPU training run completes and its generated held-out conversations have been inspected.
+**v2.3 is a separate experimental branch, not a replacement for the published v2.1 release.** It is intended to improve real multi-turn conversation by giving the randomly initialised model a broader dialogue corpus, first teaching general transcript language patterns, then focusing training on assistant replies, and finally testing generated-history rollouts.
 
-All student networks are randomly initialised. No pretrained language-model weights, embeddings, tokenizer or hidden states are loaded.
+No pretrained model weights, embeddings, hidden states or pretrained tokenizers are loaded. The student model starts from random initialisation; external resources are used only as text training data.
 
-## What is changing
+## Changes in v2.3
 
-- **Assistant-only training loss.** The generator is trained to predict assistant replies and response-ending markers, rather than spending most of its objective predicting user prompts and formatting tokens.
-- **Real multi-turn histories.** Each supervised assistant reply is paired with the preceding turns from its conversation tree. It is not reduced to an unrelated isolated prompt/answer pair.
-- **Conversation-level holdout.** OASST1 validation is split by conversation tree, while the Daily Dialogues test split is held out for generated-reply evaluation.
-- **Longer context and more capacity.** The current candidate uses a 256-dimensional, 8-layer, 8-head causal Transformer with a 512-token context and learned word/punctuation vocabulary with UTF-8 byte fallback.
-- **Actual conversation checks.** Training reports keep generated replies beside held-out reference answers and include basic open-ended prompts. Heuristic word statistics are diagnostic only.
+- **Broader dialogue data.** Adds a seeded sample of up to 25,000 conversations from UltraChat 200k in addition to OASST1 and English Daily Dialogues 10K.
+- **Two-stage language training.** First, the model learns next-token patterns across the entire multi-turn transcript. It then fine-tunes with loss focused on assistant replies and turn-ending markers.
+- **Conversation-level splits.** OASST1 validation is held out by conversation tree; UltraChat uses a separate prompt-ID validation split and a separate test_sft file; Daily Dialogues uses its own train/validation/test splits.
+- **True multi-turn rollout evaluation.** For each rollout, the model's own generated answer is fed into the following turn. Ground-truth reference replies are never inserted into generated history.
+- **Dataset provenance.** The final report records pinned revisions, checksums, downloaded byte counts, accepted rows and split sizes.
 
 ## Training data
 
-The new candidate uses three sources:
+1. **OpenAssistant OASST1** — English, non-deleted, non-synthetic, review-approved conversation messages from ready-for-export trees. Apache-2.0. [Dataset card](https://huggingface.co/datasets/OpenAssistant/oasst1)
+2. **English Daily Dialogues 10K** by Enes Deniz — synthetic, reviewed multi-turn everyday scenarios. CC-BY-4.0. Health/wellness and shopping/errands examples remain excluded. [Dataset card](https://huggingface.co/datasets/3nesdeniz/english-daily-dialogues-10k)
+3. **UltraChat 200k** — filtered multi-turn English supervised conversation dataset, MIT. A seeded sample of up to 25,000 conversations is loaded from the first train_sft shard; the distinct test_sft shard is reserved for evaluation. This dataset was used as text for training a scratch-initialised model; no Zephyr or other model weights are loaded. [Dataset card](https://huggingface.co/datasets/HuggingFaceH4/ultrachat_200k)
 
-1. **OpenAssistant OASST1** — English, non-deleted, non-synthetic, review-approved messages from conversation trees marked ready for export. The original dataset is licensed Apache-2.0. [Dataset card and license](https://huggingface.co/datasets/OpenAssistant/oasst1)
-2. **English Daily Dialogues 10K** by Enes Deniz — 10,000 synthetic English multi-turn dialogues spanning everyday domains, licensed CC-BY-4.0. Health/wellness and shopping/errands domains are excluded from this training run. [Dataset card and license](https://huggingface.co/datasets/3nesdeniz/english-daily-dialogues-10k)
-3. **Original ORBIT-authored examples** — additional explanations, stories, roleplay and seed-graph fact prompts.
+The pinned dataset revisions, files, checksums and licence information are written into the training report and `DATA_SOURCES.txt` packaged alongside the model.
 
-Dataset revisions are pinned in the training code. The final training report records downloaded file checksums, row counts, filtering and split details. The model package includes `DATA_SOURCES.txt` attribution.
+## Model and training configuration
 
-The external datasets add much more varied dialogue than v2.1's small synthetic-only corpus, but they are still finite and imperfect. They do not guarantee broad knowledge, reliable reasoning or human-level conversation.
-
-## Architecture and training
-
-The system contains four randomly initialised neural networks:
-
-- **PerceptionNet** estimates entities and relations in a question.
-- **AssociationNet** scores objects associated with subject/relation pairs in the small seed graph.
-- **MemoryNet** retrieves relevant stored facts.
-- **NeuralLanguageGenerator** generates the response from the current user message, preceding conversation and retrieved context.
-
-The candidate training defaults are:
+The candidate retains the 256-dimensional, 8-layer, 8-head causal Transformer, with 512-token context and a learned word/punctuation vocabulary with UTF-8 byte fallback. The default training settings are:
 
     --generator-epochs 30
     --generator-batch-size 16
@@ -43,23 +32,24 @@ The candidate training defaults are:
     --generator-heads 8
     --generator-block-size 512
     --generator-learning-rate 0.00035
+    --ultrachat-max-conversations 25000
 
-Normal training uses Kaggle's NVIDIA Tesla T4 GPU, CUDA mixed precision when available, fused AdamW where supported, gradient clipping, a cosine learning-rate schedule and validation-based checkpoint selection. CPU is used only for CI smoke tests.
+The first five epochs (or the bounded warmup setting in the training code) model all transcript tokens. Remaining epochs focus loss on assistant output. All language-model student weights are randomly initialised. Kaggle T4 GPU training uses CUDA mixed precision where available, fused AdamW when supported, gradient clipping, a cosine learning-rate schedule and validation-loss checkpoint selection.
 
-The language loss is computed only over assistant response text and response-ending markers. Training batches are selected so each contains assistant targets.
+## Evaluation
 
-## Current release status
+The report stores:
+- assistant-only validation loss and data provenance;
+- generated replies beside held-out reference replies;
+- basic open-ended prompts;
+- multi-turn autoregressive rollouts where each generated reply becomes the next turn's history;
+- repeated n-gram, unique-word and replacement-character diagnostics.
 
-- **Latest published Cognitive release:** [ORBIT Cognitive v2.1](https://github.com/lm11-gif/ok/releases/tag/orbit-cognitive-v2.1)
-- **v2.2 candidate source:** available on the repository's `main` branch.
-- **v2.2 model ZIP:** not published yet. A separate release will be created only after the Kaggle run succeeds and the held-out generated replies are reviewed.
+The diagnostics are not a substitute for human evaluation. Lower loss does not prove coherence. Check whether answers address the latest user message, remain grammatical, use conversation history, and avoid unrelated fact memorisation.
 
-## Evaluation standard
+## Release status
 
-A lower validation loss is not enough. The report must show the assistant's generated response beside the held-out human or synthetic reference reply, including the previous conversation turns. Check whether the response addresses the latest message, follows conversational context, uses grammatical sentences, avoids irrelevant facts and remains consistent across turns.
+The v2.3 branch is under test. The separate candidate GPU workflow publishes a prerelease only after training and archive validation. It does not overwrite v1, v2, or v2.1.
 
-Do not describe v2.2 as coherent or ready merely because training finishes. The actual replies must support that conclusion.
+The latest stable Cognitive release remains [ORBIT Cognitive v2.1](https://github.com/lm11-gif/ok/releases/tag/orbit-cognitive-v2.1). The v2.2 baseline training run remains separate.
 
-## Running a published model
-
-For the currently published v2.1 package, use the [v2.1 release page](https://github.com/lm11-gif/ok/releases/tag/orbit-cognitive-v2.1). The older byte-level v2 and word-piece v2.1 checkpoints are not interchangeable with the v2.2 candidate architecture.
