@@ -1,4 +1,4 @@
-name: Train ORBIT Cognitive v2.1 on Kaggle GPU
+name: Train ORBIT Cognitive v2.2 Conversational on Kaggle GPU
 on:
   workflow_dispatch:
   push:
@@ -8,7 +8,7 @@ on:
 permissions:
   contents: write
 concurrency:
-  group: orbit-cognitive-v2-1-kaggle
+  group: orbit-cognitive-v2-2-kaggle
   cancel-in-progress: false
 jobs:
   train:
@@ -49,14 +49,14 @@ jobs:
           python -m py_compile "$KERNEL_DIR/train.py"
           cat > "$KERNEL_DIR/kernel-metadata.json" <<EOF
           {
-            "id": "$KAGGLE_USERNAME/orbit-cognitive-v2-1-gpu-training",
-            "title": "ORBIT Cognitive v2.1 GPU Training",
+            "id": "$KAGGLE_USERNAME/orbit-cognitive-v2-2-gpu-training",
+            "title": "ORBIT Cognitive v2.2 Conversational GPU Training",
             "code_file": "train.py",
             "language": "python",
             "kernel_type": "script",
             "is_private": "true",
             "enable_gpu": "true",
-            "enable_internet": "false",
+            "enable_internet": "true",
             "machine_shape": "NvidiaTeslaT4",
             "dataset_sources": [],
             "competition_sources": [],
@@ -69,7 +69,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          KERNEL_ID="$KAGGLE_USERNAME/orbit-cognitive-v2-1-gpu-training"
+          KERNEL_ID="$KAGGLE_USERNAME/orbit-cognitive-v2-2-gpu-training"
           kaggle kernels push -p "$KERNEL_DIR" --timeout 43200 --accelerator NvidiaTeslaT4
           echo "KERNEL_ID=$KERNEL_ID" >> "$GITHUB_ENV"
           echo "Submitted Kaggle kernel: $KERNEL_ID"
@@ -106,9 +106,9 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/orbit-cognitive-output" "$RUNNER_TEMP/orbit-cognitive-extracted"
           kaggle kernels output "$KERNEL_ID" -p "$RUNNER_TEMP/orbit-cognitive-output" --force
-          ARCHIVE="$(find "$RUNNER_TEMP/orbit-cognitive-output" -type f -name 'orbit-cognitive-v2.1.zip' -print -quit)"
+          ARCHIVE="$(find "$RUNNER_TEMP/orbit-cognitive-output" -type f -name 'orbit-cognitive-v2.2.zip' -print -quit)"
           if [[ -z "$ARCHIVE" || ! -s "$ARCHIVE" ]]; then
-            echo "::error::Kaggle output did not contain orbit-cognitive-v2.1.zip."
+            echo "::error::Kaggle output did not contain orbit-cognitive-v2.2.zip."
             find "$RUNNER_TEMP/orbit-cognitive-output" -maxdepth 5 -type f -printf '%p (%s bytes)\n'
             exit 1
           fi
@@ -133,7 +133,7 @@ jobs:
       - name: Upload durable workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: orbit-cognitive-v2-1-training-${{ github.run_id }}
+          name: orbit-cognitive-v2-2-training-${{ github.run_id }}
           path: |
             ${{ env.ORBIT_COGNITIVE_ARCHIVE }}
             ${{ env.ORBIT_COGNITIVE_EXTRACTED }}/training_report.json
@@ -144,10 +144,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TAG="orbit-cognitive-v2.1"
+          TAG="orbit-cognitive-v2.2"
           NOTES="$RUNNER_TEMP/orbit-cognitive-release-notes.md"
           cat > "$NOTES" <<'EOF'
-          ORBIT Cognitive v2.1 is an experimental, GPU-trained multi-network prototype.
+          ORBIT Cognitive v2.2 Conversational is an experimental, GPU-trained multi-network prototype.
           PerceptionNet, AssociationNet, MemoryNet, and NeuralLanguageGenerator are randomly initialised.
           The generator uses a learned word/punctuation vocabulary with UTF-8 byte fallback. Training windows never cross document boundaries, and the report includes generated prompt-evaluation samples.
           The release contains all specialist checkpoints, the seed fact graph,
@@ -163,7 +163,7 @@ jobs:
             gh release create "$TAG" "$ORBIT_COGNITIVE_ARCHIVE" \
               "$ORBIT_COGNITIVE_EXTRACTED/training_report.json" \
               "$ORBIT_COGNITIVE_EXTRACTED/config.json" \
-              --repo "$GITHUB_REPOSITORY" --title "ORBIT Cognitive v2.1" \
+              --repo "$GITHUB_REPOSITORY" --title "ORBIT Cognitive v2.2 Conversational" \
               --notes-file "$NOTES" --target main
           fi
       - name: Publish training summary
@@ -171,7 +171,7 @@ jobs:
         shell: bash
         run: |
           {
-            echo "## ORBIT Cognitive v2.1 GPU Training"
+            echo "## ORBIT Cognitive v2.2 Conversational GPU Training"
             echo ""
             echo "Kaggle kernel: ${KERNEL_ID:-not submitted}"
             if [[ -n "${ORBIT_COGNITIVE_EXTRACTED:-}" && -f "$ORBIT_COGNITIVE_EXTRACTED/training_report.json" ]]; then
