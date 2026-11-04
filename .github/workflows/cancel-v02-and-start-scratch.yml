@@ -38,7 +38,7 @@ jobs:
           session_id = 2
           api = KaggleApi()
           api.authenticate()
-          request = ApiCancelKernelSessionRequest(kernel_session_id=session_id)
+          request = ApiCancelKernelSessionRequest(session_id)
           with api.build_kaggle_client() as client:
               client.kernels.kernels_api_client.cancel_kernel_session(request)
           print(f"Cancellation request accepted by Kaggle for session {session_id}.")
