@@ -2,3 +2,5 @@ GPU training requested on 2026-11-04 after the ORBIT Cognitive v2.1 CI checks pa
 Submit a separate Kaggle GPU kernel: dud12345/orbit-cognitive-v2-1-gpu-training.
 Train the randomly initialised PerceptionNet, AssociationNet, MemoryNet and the new word-piece NeuralLanguageGenerator. Keep complete dialogue documents isolated when sampling token windows. Use the learned vocabulary with UTF-8 byte fallback, and retain held-out generation samples in training_report.json.
 Publish a separate orbit-cognitive-v2.1 release containing generator.pt, tokenizer.json, config.json, all specialist checkpoints, source files, README.txt and run_orbit.bat. Do not overwrite the existing v2 or v1 releases or kernels. Use the shared Kaggle GPU concurrency group.
+
+Retrigger v2.1 GPU training after successful CI run 41775996730 (commit 69cdc491e0d66d7534d5211ccbcc9a261b9d726f). Submit the corrected v2.1 script to the existing v2-1 Kaggle kernel; preserve prior releases.
