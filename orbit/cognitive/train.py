@@ -24,10 +24,12 @@ import torch.nn.functional as F
 
 try:
     from .core import build_seed_data, encode_examples, encode_facts, encode_text, QUESTION_TEMPLATES
-    from .models import PerceptionNet, AssociationNet, MemoryNet, NeuralLanguageGenerator
+    from .models import PerceptionNet, AssociationNet, MemoryNet
+    from .language import VocabularyTokenizer, NeuralLanguageGenerator
 except ImportError:  # Kaggle script mode: modules are side-by-side.
     from core import build_seed_data, encode_examples, encode_facts, encode_text, QUESTION_TEMPLATES
-    from models import PerceptionNet, AssociationNet, MemoryNet, NeuralLanguageGenerator
+    from models import PerceptionNet, AssociationNet, MemoryNet
+    from language import VocabularyTokenizer, NeuralLanguageGenerator
 
 
 def parse_args():
@@ -41,12 +43,13 @@ def parse_args():
     parser.add_argument("--dim", type=int, default=96)
     parser.add_argument("--learning-rate", type=float, default=0.002)
     parser.add_argument("--seed", type=int, default=20261104)
-    parser.add_argument("--generator-epochs", type=int, default=12)
+    parser.add_argument("--generator-epochs", type=int, default=40)
     parser.add_argument("--generator-batch-size", type=int, default=32)
-    parser.add_argument("--generator-dim", type=int, default=128)
-    parser.add_argument("--generator-layers", type=int, default=4)
-    parser.add_argument("--generator-heads", type=int, default=4)
-    parser.add_argument("--generator-block-size", type=int, default=384)
+    parser.add_argument("--generator-vocab-size", type=int, default=8192)
+    parser.add_argument("--generator-dim", type=int, default=192)
+    parser.add_argument("--generator-layers", type=int, default=6)
+    parser.add_argument("--generator-heads", type=int, default=6)
+    parser.add_argument("--generator-block-size", type=int, default=256)
     parser.add_argument("--generator-learning-rate", type=float, default=0.0006)
     parser.add_argument("--smoke", action="store_true", help="One short epoch per model for CI.")
     parser.add_argument("--no-amp", action="store_true", help="Disable CUDA mixed precision.")
@@ -344,7 +347,6 @@ def run_memory(data, device, out_dir, args, amp_enabled):
     }
 
 
-LANGUAGE_EOS_ID = 256
 LANGUAGE_SYSTEM_PROMPT = (
     "You are ORBIT, an experimental AI assistant. Respond naturally and directly. "
     "Use retrieved memory facts as evidence, but do not claim that memory is complete. "
@@ -401,18 +403,18 @@ def _natural_fact_answer(group: list[dict[str, Any]]) -> str:
 
 
 def build_language_documents(data: dict[str, Any], seed: int) -> list[str]:
-    """Join original conversations with fact-grounded prompts for retrieval conditioning."""
+    """Build complete prompt/answer documents with one consistent chat format."""
     base_text = load_base_language_corpus()
     documents: list[str] = []
-    for chunk in base_text.split("\n\n"):
+    for chunk in base_text.split("\\n\\n"):
         chunk = chunk.strip()
         if not chunk:
             continue
         chunk = chunk.replace(
-            "\n<|assistant|>",
-            "\n<|context|>No verified memory facts were retrieved.\n<|assistant|>",
+            "\\n<|assistant|>",
+            "\\n<|context|>No verified memory facts were retrieved.\\n<|assistant|>",
         )
-        documents.append(f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\n{chunk}\n<|end|>")
+        documents.append(f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\\n{chunk}\\n<|end|>")
 
     grouped: dict[tuple[int, int], list[dict[str, Any]]] = {}
     for fact in data["facts"]:
@@ -427,64 +429,104 @@ def build_language_documents(data: dict[str, Any], seed: int) -> list[str]:
         answer = _natural_fact_answer(group)
         for template in QUESTION_TEMPLATES[relation]:
             documents.append(
-                f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\n"
-                f"<|user|> {template.format(s=subject)}\n"
-                f"<|context|> {context}\n"
-                f"<|assistant|> {answer}\n<|end|>"
+                f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\\n"
+                f"<|user|> {template.format(s=subject)}\\n"
+                f"<|context|> {context}\\n"
+                f"<|assistant|> {answer}\\n<|end|>"
             )
     documents.extend([
-        f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\n"
-        "<|user|> What is a flibbertigibbet?\n"
-        "<|context|> No verified memory facts were retrieved.\n"
-        "<|assistant|> I do not have enough information about that term to give a reliable definition.\n<|end|>",
-        f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\n"
-        "<|user|> Can you answer every possible question?\n"
-        "<|context|> No verified memory facts were retrieved.\n"
-        "<|assistant|> No. I have limited knowledge and can make mistakes. I should say when I am unsure instead of presenting a guess as a fact.\n<|end|>",
+        f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\\n"
+        "<|user|> What is a flibbertigibbet?\\n"
+        "<|context|> No verified memory facts were retrieved.\\n"
+        "<|assistant|> I do not have enough information about that term to give a reliable definition.\\n<|end|>",
+        f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\\n"
+        "<|user|> Can you answer every possible question?\\n"
+        "<|context|> No verified memory facts were retrieved.\\n"
+        "<|assistant|> No. I have limited knowledge and can make mistakes. I should say when I am unsure instead of presenting a guess as a fact.\\n<|end|>",
     ])
     random.Random(seed).shuffle(documents)
     return documents
 
 
-def encode_language_documents(documents: list[str]) -> tuple[list[int], list[int]]:
-    if len(documents) < 2:
-        raise ValueError("The language corpus needs at least two documents.")
-    split = max(1, int(len(documents) * 0.97))
-    split = min(split, len(documents) - 1)
+def _language_batch(sequences: list[torch.Tensor], block_size: int,
+                    batch_size: int, pad_id: int, device: torch.device):
+    """Sample each training example from one document; never join conversations."""
+    inputs = torch.full(
+        (batch_size, block_size), pad_id, dtype=torch.long, device=device
+    )
+    targets = torch.full_like(inputs, pad_id)
+    for row in range(batch_size):
+        sequence = sequences[random.randrange(len(sequences))]
+        max_start = max(0, int(sequence.numel()) - block_size - 1)
+        start = random.randint(0, max_start)
+        sample = sequence[start:start + block_size + 1]
+        usable = max(0, min(block_size, int(sample.numel()) - 1))
+        if usable:
+            inputs[row, :usable] = sample[:usable]
+            targets[row, :usable] = sample[1:usable + 1]
+    return inputs, targets
 
-    def flatten(rows: list[str]) -> list[int]:
-        values: list[int] = []
-        for row in rows:
-            values.extend(row.encode("utf-8"))
-            values.append(LANGUAGE_EOS_ID)
-        return values
 
-    return flatten(documents[:split]), flatten(documents[split:])
-
-
-def _language_batch(tokens: torch.Tensor, block_size: int, batch_size: int):
-    max_start = tokens.numel() - block_size - 1
-    if max_start < 1:
-        raise ValueError("Language corpus is shorter than the generator context window.")
-    starts = torch.randint(max_start, (batch_size,), device=tokens.device)
-    offsets = torch.arange(block_size + 1, device=tokens.device)
-    batch = tokens[starts[:, None] + offsets[None, :]]
-    return batch[:, :-1], batch[:, 1:]
+def _language_quality_stats(samples: list[dict[str, str]]) -> dict[str, Any]:
+    """Report transparent generation diagnostics, not a claim of human fluency."""
+    reports = []
+    for sample in samples:
+        answer = sample["answer"]
+        words = re.findall(r"[A-Za-z]+(?:['’][A-Za-z]+)?", answer.lower())
+        ngrams = [tuple(words[i:i + 4]) for i in range(max(0, len(words) - 3))]
+        repeated = len(ngrams) - len(set(ngrams))
+        reports.append({
+            "prompt": sample["prompt"],
+            "answer": answer,
+            "word_count": len(words),
+            "unique_word_ratio": round(len(set(words)) / max(1, len(words)), 3),
+            "repeated_fourgram_count": repeated,
+            "replacement_character_count": answer.count("�"),
+        })
+    return {
+        "samples": reports,
+        "mean_unique_word_ratio": round(
+            sum(row["unique_word_ratio"] for row in reports) / max(1, len(reports)), 3
+        ),
+        "total_repeated_fourgram_count": sum(
+            row["repeated_fourgram_count"] for row in reports
+        ),
+        "total_replacement_character_count": sum(
+            row["replacement_character_count"] for row in reports
+        ),
+        "note": "Heuristic diagnostics only; inspect the saved answers for actual coherence.",
+    }
 
 
 def run_language_generator(data, device, out_dir, args, amp_enabled):
     documents = build_language_documents(data, args.seed)
-    train_ids, validation_ids = encode_language_documents(documents)
-    train_tokens = torch.tensor(train_ids, dtype=torch.long, device=device)
-    validation_tokens = torch.tensor(validation_ids, dtype=torch.long, device=device)
+    if len(documents) < 20:
+        raise RuntimeError("Language corpus is too small for a train/validation split.")
+    tokenizer = VocabularyTokenizer.build(
+        documents, max_vocab=args.generator_vocab_size, min_frequency=2
+    )
+    split = max(1, int(len(documents) * 0.95))
+    split = min(split, len(documents) - 1)
+    train_sequences = [
+        torch.tensor(tokenizer.encode(doc) + [tokenizer.EOS_ID],
+                     dtype=torch.long, device=device)
+        for doc in documents[:split]
+    ]
+    validation_sequences = [
+        torch.tensor(tokenizer.encode(doc) + [tokenizer.EOS_ID],
+                     dtype=torch.long, device=device)
+        for doc in documents[split:]
+    ]
     config = {
-        "vocab_size": NeuralLanguageGenerator.vocab_size,
+        "vocab_size": tokenizer.vocab_size,
+        "pad_id": tokenizer.PAD_ID,
+        "eos_id": tokenizer.EOS_ID,
         "block_size": args.generator_block_size,
         "dim": args.generator_dim,
         "layers": args.generator_layers,
         "heads": args.generator_heads,
         "dropout": 0.10,
-        "tokenizer": "UTF-8 byte-level; IDs 0..255 are bytes, 256 is EOS",
+        "tokenizer": tokenizer.FORMAT,
         "from_scratch": True,
     }
     model = NeuralLanguageGenerator(config).to(device)
@@ -492,27 +534,38 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
     scaler = new_scaler(device, amp_enabled)
     epochs = 1 if args.smoke else args.generator_epochs
     batch_size = min(args.generator_batch_size, 4) if args.smoke else args.generator_batch_size
-    steps_per_epoch = max(1, train_tokens.numel() // (config["block_size"] * batch_size))
+    train_token_count = sum(int(sequence.numel()) for sequence in train_sequences)
+    steps_per_epoch = max(
+        20, min(160, train_token_count // max(1, config["block_size"] * batch_size))
+    )
     if args.smoke:
-        steps_per_epoch = min(2, steps_per_epoch)
-    validation_batches = 2 if args.smoke else 12
+        steps_per_epoch = 3
+    validation_batches = 2 if args.smoke else 20
     best_validation_loss = float("inf")
     best_state = None
     best_epoch = 0
     stale_epochs = 0
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=max(1, epochs),
+        eta_min=args.generator_learning_rate * 0.10,
+    )
     started = time.perf_counter()
 
     for epoch in range(epochs):
         model.train()
         running_loss = 0.0
         for _ in range(steps_per_epoch):
-            inputs, targets = _language_batch(train_tokens, config["block_size"], batch_size)
+            inputs, targets = _language_batch(
+                train_sequences, config["block_size"], batch_size,
+                tokenizer.PAD_ID, device,
+            )
             optimizer.zero_grad(set_to_none=True)
             with autocast_context(device, amp_enabled):
                 logits = model(inputs)
                 loss = F.cross_entropy(
-                    logits.float().reshape(-1, NeuralLanguageGenerator.vocab_size),
+                    logits.float().reshape(-1, tokenizer.vocab_size),
                     targets.reshape(-1),
+                    ignore_index=tokenizer.PAD_ID,
                 )
             if not torch.isfinite(loss):
                 raise RuntimeError("Language-generator training produced a non-finite loss.")
@@ -528,20 +581,24 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
         with torch.no_grad():
             for _ in range(validation_batches):
                 inputs, targets = _language_batch(
-                    validation_tokens, config["block_size"], batch_size
+                    validation_sequences, config["block_size"], batch_size,
+                    tokenizer.PAD_ID, device,
                 )
                 with autocast_context(device, amp_enabled):
                     logits = model(inputs)
                     loss = F.cross_entropy(
-                        logits.float().reshape(-1, NeuralLanguageGenerator.vocab_size),
+                        logits.float().reshape(-1, tokenizer.vocab_size),
                         targets.reshape(-1),
+                        ignore_index=tokenizer.PAD_ID,
                     )
                 validation_loss += float(loss.item())
         validation_loss /= validation_batches
         train_loss = running_loss / steps_per_epoch
+        scheduler.step()
         print(
-            f"LanguageGenerator epoch {epoch + 1}/{epochs}: "
-            f"train_loss={train_loss:.4f} validation_loss={validation_loss:.4f}",
+            f"SubwordLanguageGenerator epoch {epoch + 1}/{epochs}: "
+            f"train_loss={train_loss:.4f} validation_loss={validation_loss:.4f} "
+            f"lr={optimizer.param_groups[0]['lr']:.6g}",
             flush=True,
         )
         if validation_loss < best_validation_loss:
@@ -554,13 +611,38 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
             }
         else:
             stale_epochs += 1
-            if not args.smoke and stale_epochs >= 4:
+            if not args.smoke and stale_epochs >= 8:
                 break
 
     if best_state is None:
         raise RuntimeError("Language-generator training did not produce a checkpoint.")
     model.load_state_dict(best_state)
     model.eval()
+    tokenizer.save(out_dir / "tokenizer.json")
+
+    evaluation_prompts = [
+        "Hello, how are you?",
+        "What is a computer program?",
+        "Can you explain what an algorithm is?",
+        "Tell me a short story about someone who solves a problem.",
+        "What should you do when you do not know an answer?",
+    ]
+    evaluation_samples = []
+    torch.manual_seed(args.seed + 991)
+    for prompt in evaluation_prompts:
+        formatted = (
+            f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\\n"
+            f"<|user|> {prompt}\\n"
+            "<|context|> No verified memory facts were retrieved.\\n"
+            "<|assistant|>"
+        )
+        answer = model.generate(
+            formatted, tokenizer, max_new_tokens=96,
+            temperature=0.72, top_k=40, top_p=0.92,
+        )
+        evaluation_samples.append({"prompt": prompt, "answer": answer})
+    generation_evaluation = _language_quality_stats(evaluation_samples)
+
     sync_cuda(device)
     elapsed = time.perf_counter() - started
     parameters = sum(parameter.numel() for parameter in model.parameters())
@@ -568,22 +650,26 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
         "parameters": parameters,
         "best_epoch": best_epoch,
         "best_validation_loss": best_validation_loss,
-        "training_documents": len(documents),
-        "training_bytes": len(train_ids),
-        "validation_bytes": len(validation_ids),
+        "training_documents": len(train_sequences),
+        "validation_documents": len(validation_sequences),
+        "training_tokens": train_token_count,
+        "validation_tokens": sum(int(x.numel()) for x in validation_sequences),
+        "vocab_size": tokenizer.vocab_size,
         "random_initialisation": True,
     })
     save_checkpoint(out_dir / "generator.pt", model, {
         "name": "NeuralLanguageGenerator",
         "random_initialisation": True,
-        "objective": "causal next-byte prediction",
+        "objective": "causal next-subword prediction with UTF-8 byte fallback",
         "best_epoch": best_epoch,
         "best_validation_loss": best_validation_loss,
-        "training_documents": len(documents),
-        "training_bytes": len(train_ids),
-        "validation_bytes": len(validation_ids),
+        "training_documents": len(train_sequences),
+        "validation_documents": len(validation_sequences),
+        "training_tokens": train_token_count,
+        "validation_tokens": sum(int(x.numel()) for x in validation_sequences),
         "optimizer_fused": fused,
-        "context_length_bytes": config["block_size"],
+        "context_length_tokens": config["block_size"],
+        "tokenizer_format": tokenizer.FORMAT,
     })
     return {
         "parameters": parameters,
@@ -591,19 +677,22 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
         "best_epoch": best_epoch,
         "best_validation_loss": best_validation_loss,
         "training_loss_last_epoch": train_loss,
-        "training_documents": len(documents),
-        "training_bytes": len(train_ids),
-        "validation_bytes": len(validation_ids),
+        "training_documents": len(train_sequences),
+        "validation_documents": len(validation_sequences),
+        "training_tokens": train_token_count,
+        "validation_tokens": sum(int(x.numel()) for x in validation_sequences),
+        "vocab_size": tokenizer.vocab_size,
         "steps_per_epoch": steps_per_epoch,
         "batch_size": batch_size,
         "seconds": elapsed,
         "fused_adamw": fused,
+        "generation_evaluation": generation_evaluation,
     }, config
 
 
 def write_runtime_package(output: Path) -> list[str]:
     """Add the complete inference runner to the model archive."""
-    names = ["chat.py", "core.py", "models.py", "requirements.txt"]
+    names = ["chat.py", "core.py", "models.py", "language.py", "requirements.txt"]
     embedded = globals().get("RUNTIME_SOURCE_FILES")
     source_root = Path(__file__).resolve().parent
     written = []
@@ -655,6 +744,7 @@ def main():
         args.epochs_perception = args.epochs_association = args.epochs_memory = 1
         args.generator_epochs = 1
         args.generator_dim = 32
+        args.generator_vocab_size = 1024
         args.generator_layers = 1
         args.generator_heads = 2
         args.generator_block_size = 64
@@ -695,7 +785,7 @@ def main():
         json.dumps(serial_facts, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
     config = {
-        "project": "ORBIT Cognitive v2",
+        "project": "ORBIT Cognitive v2.1",
         "dataset_fingerprint_sha256": data_fingerprint,
         "from_scratch": True,
         "pretrained_student_weights": False,
@@ -706,7 +796,7 @@ def main():
         "entity_count": len(data["entities"]),
         "relation_count": len(data["relations"]),
         "fact_count": len(data["facts"]),
-        "language_generator": {"vocab_size": 257, "block_size": args.generator_block_size, "dim": args.generator_dim, "layers": args.generator_layers, "heads": args.generator_heads, "dropout": 0.10, "tokenizer": "UTF-8 byte-level; 256 is EOS", "from_scratch": True},
+        "language_generator": {"block_size": args.generator_block_size, "dim": args.generator_dim, "layers": args.generator_layers, "heads": args.generator_heads, "dropout": 0.10, "tokenizer": VocabularyTokenizer.FORMAT, "from_scratch": True},
         "seed": args.seed,
         "device": device_name,
         "device_memory_gb": device_memory_gb,
@@ -719,8 +809,8 @@ def main():
         "amp": amp_enabled,
         "optimizer": "AdamW (fused when supported)",
         "training_examples": {k: len(v) for k, v in data["examples"].items()},
-        "dataset": "Seed fact graph plus original synthetic multi-turn dialogue corpus and fact-grounded prompts",
-        "dataset_scope_warning": "Small bootstrap benchmark only; not broad language understanding or comprehensive world knowledge.",
+        "dataset": "Original synthetic multi-turn dialogue corpus and fact-grounded prompts; document-level split",
+        "dataset_scope_warning": "Small original synthetic corpus; training from scratch cannot be assumed to produce broad language understanding or comprehensive world knowledge.",
     }
     (output / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
     print("ORBIT Cognitive v2 training configuration:")
@@ -737,7 +827,7 @@ def main():
     config["language_generator"] = generator_config
     total_seconds = time.perf_counter() - start
     report = {
-        "project": "ORBIT Cognitive v2",
+        "project": "ORBIT Cognitive v2.1",
         "status": "smoke_test_only" if args.smoke else "trained",
         "all_students_randomly_initialised": True,
         "teacher_weights_loaded": False,
@@ -763,7 +853,7 @@ def main():
             "The seed fact graph is small and manually curated.",
             "Template-generated language coverage is narrow.",
             "High benchmark scores do not establish general reasoning or broad language understanding.",
-            "The generator is a small byte-level model trained on an original synthetic dialogue corpus; fluency and factual accuracy remain limited.",
+            "The generator is trained from scratch on a small original synthetic dialogue corpus; subword tokenisation improves text efficiency but does not guarantee human-level fluency or factual accuracy.",
             "The 67-fact graph provides narrow factual grounding; the language model can still make unsupported statements.",
         ],
     }
