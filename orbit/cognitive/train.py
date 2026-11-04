@@ -7,6 +7,7 @@ All generated training examples are based on the versioned seed knowledge graph.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from contextlib import nullcontext
@@ -146,6 +147,7 @@ def run_perception(data, device, out_dir, args, amp_enabled):
         "validation_score": best_score, "best_epoch": best_epoch,
         "test": test_metrics, "seconds": elapsed, "fused_adamw": fused,
         "train_examples": int(tx.shape[0]),
+        "parameters": sum(parameter.numel() for parameter in model.parameters()),
     }
 
 
@@ -220,6 +222,7 @@ def run_association(data, device, out_dir, args, amp_enabled):
         "validation_top1_hit_rate": best_score, "best_epoch": best_epoch,
         "test": test_metrics, "seconds": elapsed, "fused_adamw": fused,
         "train_subject_relation_groups": int(train_s.shape[0]),
+        "parameters": sum(parameter.numel() for parameter in model.parameters()),
     }
 
 
@@ -281,6 +284,7 @@ def run_memory(data, device, out_dir, args, amp_enabled):
         "test": {"recall_at_1": top1, "recall_at_5": top5},
         "seconds": elapsed, "fused_adamw": fused,
         "train_queries": int(train_x.shape[0]), "memory_records": int(facts_x.shape[0]),
+        "parameters": sum(parameter.numel() for parameter in model.parameters()),
     }
 
 
@@ -320,8 +324,12 @@ def main():
     serial_facts = [{k: v for k, v in fact.items()} for fact in data["facts"]]
     (output / "facts.json").write_text(json.dumps(serial_facts, indent=2), encoding="utf-8")
 
+    data_fingerprint = hashlib.sha256(
+        json.dumps(serial_facts, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
     config = {
         "project": "ORBIT Cognitive v1",
+        "dataset_fingerprint_sha256": data_fingerprint,
         "from_scratch": True,
         "pretrained_student_weights": False,
         "specialists": ["PerceptionNet", "AssociationNet", "MemoryNet"],
@@ -334,6 +342,12 @@ def main():
         "seed": args.seed,
         "device": device_name,
         "device_memory_gb": device_memory_gb,
+        "device_capability": (
+            list(torch.cuda.get_device_capability(0)) if device.type == "cuda" else None
+        ),
+        "torch_version": str(torch.__version__),
+        "cuda_version": str(torch.version.cuda) if torch.version.cuda else None,
+        "cuda_available": bool(torch.cuda.is_available()),
         "amp": amp_enabled,
         "optimizer": "AdamW (fused when supported)",
         "training_examples": {k: len(v) for k, v in data["examples"].items()},
