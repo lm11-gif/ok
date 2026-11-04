@@ -19,9 +19,12 @@ distillation, not weight fine-tuning.
 3. **Assistant tuning:** ORBIT is trained on assistant conversations from
    Smol-SmolTalk and extra answers written by SmolLM3-3B. The loss is masked
    to apply to assistant replies, not user prompts.
-4. **Evaluation:** the training report records train/validation losses and
-   actual generated answers. These are diagnostics, not proof that the model
-   is already a good assistant.
+4. **Teacher preference tuning (DPO):** after the scratch checkpoint is
+   published, SmolLM3 reviews ORBIT's own drafts. A separate DPO stage trains
+   the scratch-trained policy to prefer the teacher-reviewed answers.
+5. **Evaluation:** reports include train/validation losses, preference-pair
+   statistics and side-by-side answers. These are diagnostics, not proof that
+   the model is already a good assistant.
 
 ## Initial model and compute budget
 
@@ -48,9 +51,14 @@ It can be started manually from the Actions tab, or by updating
 START_TRAINING.txt. The workflow uses the existing Kaggle repository
 secrets; do not put API keys in this folder or commit them.
 
-When it finishes, the checkpoint is published at:
+The first checkpoint is published at:
 
 https://github.com/lm11-gif/ok/releases/tag/orbit-seed-v0.3-scratch
+
+After that workflow succeeds, the separate scratch-specific DPO workflow
+runs automatically and publishes its checkpoint at:
+
+https://github.com/lm11-gif/ok/releases/tag/orbit-seed-v0.3-scratch-dpo
 
 ## Run locally
 
@@ -79,6 +87,9 @@ python chat.py --model . --device cpu
   are loaded into the student or used as its initialization.
 - The model's configuration and training report explicitly record
   from_scratch: true and pretrained_student_weights: false.
+- The scratch-specific DPO stage loads only this scratch checkpoint, with a
+  frozen copy of that same checkpoint as its reference policy. Its teacher
+  contributes preference text only.
 
 ## Data and model notices
 
