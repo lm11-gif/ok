@@ -521,6 +521,11 @@ def main():
         max_shard_size="500MB",
     )
     tokenizer.save_pretrained(OUTPUT_DIR)
+    # Preserve the upstream SFT notices/license material with the DPO export.
+    for notice_name in ("NOTICE.md", "UPSTREAM_LICENSE"):
+        source_notice = model_path / notice_name
+        if source_notice.is_file():
+            shutil.copy2(source_notice, OUTPUT_DIR / notice_name)
 
     # Compare SFT and DPO on the same held-out-from-optimization prompts.
     # These are generated from the original student drafts captured above.
