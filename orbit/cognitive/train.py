@@ -699,6 +699,187 @@ def _build_language_quality_stats(samples: list[dict[str, Any]]) -> dict[str, An
     }
 
 
+def _natural_fact_answer(group: list[dict[str, Any]]) -> str:
+    subject = group[0]["subject"].replace("_", " ")
+    relation = group[0]["relation"]
+    objects = [fact["object"].replace("_", " ") for fact in group]
+    obj = objects[0] if len(objects) == 1 else ", ".join(objects[:-1]) + " and " + objects[-1]
+    if relation == "is_a":
+        if obj in {"precipitation", "furniture", "water", "oxygen", "computation", "transportation"}:
+            return f"{subject} is {obj}."
+        article = "an" if obj[:1].lower() in "aeiou" else "a"
+        return f"{subject} is {article} {obj}."
+    forms = {
+        "made_of": f"{subject} is made of {obj}.",
+        "falls_from": f"{subject} falls from {obj}.",
+        "located_in": f"{subject} is found in {obj}.",
+        "produces": f"{subject} produces {obj}.",
+        "used_for": f"{subject} is used for {obj}.",
+        "powered_by": f"{subject} is powered by {obj}.",
+        "contains": f"{subject} contains {obj}.",
+        "performs": f"{subject} performs {obj}.",
+        "part_of": f"{subject} is part of {obj}.",
+        "stores": f"{subject} stores {obj}.",
+        "needs": f"{subject} needs {obj}.",
+        "absorbs": f"{subject} absorbs {obj}.",
+        "orbits": f"{subject} orbits {obj}.",
+        "causes": f"{subject} can cause {obj}.",
+        "flows_into": f"{subject} flows into {obj}.",
+        "has_property": f"One property of {subject} is {obj}.",
+        "connects": f"{subject} connects {obj}.",
+    }
+    return forms.get(relation, f"{subject} is related to {obj}.")
+
+
+def build_language_documents(
+    data: dict[str, Any], seed: int, include_public: bool = True
+) -> tuple[list[str], list[str], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Build assistant-supervised chat documents with held-out conversation trees."""
+    authored: list[str] = []
+    for chunk in load_base_language_corpus().split("\n\n"):
+        chunk = chunk.strip()
+        if chunk:
+            chunk = chunk.replace(
+                "\n<|assistant|>",
+                "\n<|context|>No verified memory facts were retrieved.\n<|assistant|>",
+            )
+            authored.append(f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\n{chunk}\n<|end|>")
+
+    grouped: dict[tuple[int, int], list[dict[str, Any]]] = {}
+    for fact in data["facts"]:
+        grouped.setdefault((fact["subject_id"], fact["relation_id"]), []).append(fact)
+    for group in grouped.values():
+        subject = group[0]["subject"].replace("_", " ")
+        relation = group[0]["relation"]
+        context = "; ".join(
+            f"{fact['subject'].replace('_', ' ')} {fact['relation'].replace('_', ' ')} "
+            f"{fact['object'].replace('_', ' ')}" for fact in group
+        )
+        answer = _natural_fact_answer(group)
+        for template in QUESTION_TEMPLATES[relation]:
+            authored.append(
+                f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\n"
+                f"<|user|> {template.format(s=subject)}\n"
+                f"<|context|> {context}\n"
+                f"<|assistant|> {answer}\n<|end|>"
+            )
+    authored.extend([
+        f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\n"
+        "<|user|> What is a flibbertigibbet?\n"
+        "<|context|> No verified memory facts were retrieved.\n"
+        "<|assistant|> I do not have enough information about that term to give a reliable definition.\n<|end|>",
+        f"<|system|>{LANGUAGE_SYSTEM_PROMPT}\n"
+        "<|user|> Can you answer every possible question?\n"
+        "<|context|> No verified memory facts were retrieved.\n"
+        "<|assistant|> No. I have limited knowledge and can make mistakes. I should say when I am unsure instead of presenting a guess as a fact.\n<|end|>",
+    ])
+
+    rng = random.Random(seed)
+    rng.shuffle(authored)
+    internal_split = max(1, int(len(authored) * 0.95))
+    train_documents = authored[:internal_split]
+    validation_documents = authored[internal_split:]
+    eval_examples: list[dict[str, Any]] = []
+    provenance: list[dict[str, Any]] = []
+
+    if include_public:
+        oasst_train, oasst_validation, oasst_eval, oasst_info = _load_oasst_dialogues(seed)
+        daily_train, daily_validation, daily_eval, daily_info = _load_daily_dialogues(seed)
+        train_documents.extend(oasst_train)
+        validation_documents.extend(oasst_validation)
+        train_documents.extend(daily_train)
+        validation_documents.extend(daily_validation)
+        eval_examples.extend(oasst_eval)
+        eval_examples.extend(daily_eval)
+        provenance.extend([oasst_info, daily_info])
+
+    rng.shuffle(train_documents)
+    rng.shuffle(validation_documents)
+    rng.shuffle(eval_examples)
+    return train_documents, validation_documents, eval_examples, provenance
+
+
+def assistant_target_mask(
+    token_ids: list[int] | torch.Tensor, tokenizer: VocabularyTokenizer
+) -> torch.Tensor:
+    """Mark assistant reply text and response-ending control tokens as targets."""
+    ids = token_ids.tolist() if isinstance(token_ids, torch.Tensor) else list(token_ids)
+    assistant_id = tokenizer.token_id("<|assistant|>")
+    user_id = tokenizer.token_id("<|user|>")
+    context_id = tokenizer.token_id("<|context|>")
+    system_id = tokenizer.token_id("<|system|>")
+    end_id = tokenizer.token_id("<|end|>")
+    controls = {value for value in (user_id, context_id, system_id) if value is not None}
+    mask = [False] * len(ids)
+    active = False
+    for index, token_id in enumerate(ids):
+        if token_id == assistant_id:
+            active = True
+            continue
+        if token_id in controls or token_id in {end_id, tokenizer.EOS_ID}:
+            if active and token_id in {user_id, end_id}:
+                mask[index] = True
+            active = False
+            continue
+        if active:
+            mask[index] = True
+    return torch.tensor(mask, dtype=torch.bool)
+
+
+def _language_batch(
+    sequences: list[torch.Tensor],
+    target_masks: list[torch.Tensor],
+    block_size: int,
+    batch_size: int,
+    pad_id: int,
+    device: torch.device,
+):
+    """Sample windows containing at least one assistant target."""
+    inputs = torch.full((batch_size, block_size), pad_id, dtype=torch.long, device=device)
+    targets = torch.full_like(inputs, pad_id)
+    loss_masks = torch.zeros((batch_size, block_size), dtype=torch.bool, device=device)
+    eligible = []
+    for sequence, target_mask in zip(sequences, target_masks):
+        max_start = max(0, int(sequence.numel()) - block_size - 1)
+        target_positions = torch.nonzero(target_mask, as_tuple=False).flatten()
+        valid_positions = target_positions[
+            (target_positions >= 1) & (target_positions <= max_start + block_size)
+        ]
+        if valid_positions.numel():
+            eligible.append((sequence, target_mask, max_start, valid_positions))
+    if not eligible:
+        raise RuntimeError("No sequence contains an assistant reply target within the context window.")
+
+    for row in range(batch_size):
+        sequence, target_mask, max_start, positions = eligible[random.randrange(len(eligible))]
+        target_position = int(positions[random.randrange(int(positions.numel()))].item())
+        low = max(0, target_position - block_size)
+        high = min(max_start, target_position - 1)
+        start = random.randint(low, high)
+        sample = sequence[start:start + block_size + 1]
+        usable = max(0, min(block_size, int(sample.numel()) - 1))
+        if usable:
+            inputs[row, :usable] = sample[:usable]
+            targets[row, :usable] = sample[1:usable + 1]
+            loss_masks[row, :usable] = target_mask[start + 1:start + 1 + usable].to(device)
+    return inputs, targets, loss_masks
+
+
+def _masked_language_loss(
+    logits: torch.Tensor, targets: torch.Tensor, loss_mask: torch.Tensor, pad_id: int
+) -> torch.Tensor:
+    per_token = F.cross_entropy(
+        logits.float().reshape(-1, logits.shape[-1]),
+        targets.reshape(-1),
+        ignore_index=pad_id,
+        reduction="none",
+    ).view_as(targets)
+    active = loss_mask & targets.ne(pad_id)
+    if not bool(active.any()):
+        raise RuntimeError("Sampled batch contains no assistant reply targets.")
+    return per_token[active].mean()
+
+
 def run_language_generator(data, device, out_dir, args, amp_enabled):
     train_documents, validation_documents, dialogue_eval, dataset_sources = build_language_documents(
         data, args.seed, include_public=not args.smoke
