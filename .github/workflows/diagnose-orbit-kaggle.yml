@@ -1,4 +1,4 @@
-name: Diagnose ORBIT Kaggle kernel reference
+name: Diagnose ORBIT Kaggle training status
 
 on:
   push:
@@ -19,14 +19,12 @@ jobs:
     steps:
       - name: Install Kaggle CLI
         run: python -m pip install --upgrade kaggle
-
-      - name: List matching notebooks owned by the authenticated account
+      - name: Inspect current ORBIT notebooks
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "${KAGGLE_API_TOKEN:-}" || -z "${KAGGLE_USERNAME:-}" ]]; then
-            echo "::error::Kaggle credentials are missing."
-            exit 1
-          fi
-          echo "Checking the authenticated account's own notebooks; credentials are not printed."
           kaggle kernels list --mine --search "ORBIT Seed v0.2" --format json
+          echo "=== SFT kernel status ==="
+          kaggle kernels status "dud12345/orbit-seed-v0-2-fine-tuning" || true
+          echo "=== SFT kernel recent logs ==="
+          kaggle kernels logs "dud12345/orbit-seed-v0-2-fine-tuning" || true
