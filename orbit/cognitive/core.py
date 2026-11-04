@@ -258,51 +258,52 @@ def build_seed_data() -> dict[str, Any]:
         })
 
     vocab = build_vocabulary(facts)
-    examples: dict[str, list[dict[str, Any]]] = {"train": [], "validation": [], "test": []}
-    for fact in facts:
-        templates = QUESTION_TEMPLATES[fact["relation"]]
-        for split, indices in (("train", range(0, 6)), ("validation", range(6, 8)), ("test", range(8, 10))):
-            for template_index in indices:
-                question = templates[template_index].format(s=fact["subject"].replace("_", " "))
-                examples[split].append({
-                    "text": question,
-                    "subject_id": fact["subject_id"],
-                    "relation_id": fact["relation_id"],
-                    "fact_id": fact["id"],
-                })
 
-    # Group edges by subject/relation so a pair may have multiple valid objects.
-    grouped: dict[tuple[int, int], set[int]] = {}
+    # Group all facts that share a subject/relation. A single question such
+    # as "what does a tree need?" can have multiple correct fact records.
+    grouped: dict[tuple[int, int], list[dict[str, Any]]] = {}
     for fact in facts:
         key = (fact["subject_id"], fact["relation_id"])
-        grouped.setdefault(key, set()).add(fact["object_id"])
-    by_relation: dict[int, list[dict[str, Any]]] = {}
-    for (subject_id, relation_id), object_ids in grouped.items():
-        by_relation.setdefault(relation_id, []).append({
+        grouped.setdefault(key, []).append(fact)
+
+    examples: dict[str, list[dict[str, Any]]] = {"train": [], "validation": [], "test": []}
+    association_rows = []
+    for (subject_id, relation_id), group_facts in sorted(grouped.items()):
+        subject = group_facts[0]["subject"]
+        relation = group_facts[0]["relation"]
+        templates = QUESTION_TEMPLATES[relation]
+        fact_ids = sorted(fact["id"] for fact in group_facts)
+        object_ids = sorted({fact["object_id"] for fact in group_facts})
+        association_rows.append({
             "subject_id": subject_id,
             "relation_id": relation_id,
-            "object_ids": sorted(object_ids),
+            "object_ids": object_ids,
+            "fact_ids": fact_ids,
         })
+        for split, indices in (
+            ("train", range(0, 6)),
+            ("validation", range(6, 8)),
+            ("test", range(8, 10)),
+        ):
+            for template_index in indices:
+                question = templates[template_index].format(s=subject.replace("_", " "))
+                examples[split].append({
+                    "text": question,
+                    "subject_id": subject_id,
+                    "relation_id": relation_id,
+                    "fact_id": fact_ids[0],
+                    "fact_ids": fact_ids,
+                })
 
-    # Stratify by relation and keep at least one training pair for each relation.
-    # A relation with only one subject/relation pair is train-only rather than
-    # being held out entirely, which would leave its embedding untrained.
-    rng = np.random.default_rng(20261104)
-    assoc = {"train": [], "validation": [], "test": []}
-    for relation_id in sorted(by_relation):
-        rows = by_relation[relation_id]
-        order = rng.permutation(len(rows)).tolist()
-        shuffled = [rows[i] for i in order]
-        if len(shuffled) == 1:
-            assoc["train"].extend(shuffled)
-            continue
-        n_train = max(1, int(len(shuffled) * 0.70))
-        remaining = len(shuffled) - n_train
-        n_val = max(1, int(remaining * 0.50)) if remaining >= 2 else 0
-        assoc["train"].extend(shuffled[:n_train])
-        if n_val:
-            assoc["validation"].extend(shuffled[n_train:n_train + n_val])
-        assoc["test"].extend(shuffled[n_train + n_val:])
+    # AssociationNet is a compact learned cache of the complete known graph.
+    # It is therefore trained and measured on all known subject/relation groups.
+    # Its graph-reconstruction score is explicitly NOT a held-out link-prediction
+    # or generalisation benchmark.
+    assoc = {
+        "train": list(association_rows),
+        "validation": list(association_rows),
+        "test": list(association_rows),
+    }
     return {
         "facts": facts,
         "entities": entities,
