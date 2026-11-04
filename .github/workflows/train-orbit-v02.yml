@@ -45,39 +45,79 @@ jobs:
           python -m pip install --upgrade kaggle
           kaggle --version
 
-      - name: Prepare private Kaggle training kernel
+      - name: Prepare Kaggle training kernel with resolved slug
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/orbit-v02-kernel"
           cp orbit/seed_model_v0.2/train_smollm2.py "$RUNNER_TEMP/orbit-v02-kernel/train_smollm2.py"
-          cat > "$RUNNER_TEMP/orbit-v02-kernel/kernel-metadata.json" <<EOF
-          {
-            "id": "$KAGGLE_USERNAME/orbit-seed-v02-training",
-            "title": "ORBIT Seed v0.2 Fine-tuning",
-            "code_file": "train_smollm2.py",
-            "language": "python",
-            "kernel_type": "script",
-            "is_private": "true",
-            "enable_gpu": "true",
-            "enable_internet": "true",
-            "machine_shape": "NvidiaTeslaT4",
-            "dataset_sources": [],
-            "competition_sources": [],
-            "kernel_sources": [],
-            "model_sources": []
+
+          # Reuse the exact ref Kaggle reports for an existing notebook. Kaggle
+          # normalizes punctuation in notebook titles, so don't guess the slug.
+          kaggle kernels list --mine --search "ORBIT Seed v0.2" --format json > "$RUNNER_TEMP/orbit-kernels-before.json"
+          KERNEL_ID="$(python - "$RUNNER_TEMP/orbit-kernels-before.json" <<'PY'
+          import json
+          import sys
+          rows = json.load(open(sys.argv[1], encoding="utf-8"))
+          matches = [row for row in rows if row.get("title") == "ORBIT Seed v0.2 Fine-tuning"]
+          if len(matches) > 1:
+              raise SystemExit("Multiple matching ORBIT notebooks found: " + repr([m.get("ref") for m in matches]))
+          if matches:
+              print(matches[0]["ref"])
+          PY
+          )"
+          if [[ -z "$KERNEL_ID" ]]; then
+            KERNEL_ID="$KAGGLE_USERNAME/orbit-seed-v0-2-fine-tuning"
+          fi
+
+          export KERNEL_ID
+          python - "$RUNNER_TEMP/orbit-v02-kernel/kernel-metadata.json" <<'PY'
+          import json
+          import os
+          import sys
+          metadata = {
+              "id": os.environ["KERNEL_ID"],
+              "title": "ORBIT Seed v0.2 Fine-tuning",
+              "code_file": "train_smollm2.py",
+              "language": "python",
+              "kernel_type": "script",
+              "is_private": "true",
+              "enable_gpu": "true",
+              "enable_internet": "true",
+              "machine_shape": "NvidiaTeslaT4",
+              "dataset_sources": [],
+              "competition_sources": [],
+              "kernel_sources": [],
+              "model_sources": []
           }
-          EOF
+          with open(sys.argv[1], "w", encoding="utf-8") as f:
+              json.dump(metadata, f, indent=2)
+          PY
+          echo "Using Kaggle notebook reference: $KERNEL_ID"
+          echo "KERNEL_ID=$KERNEL_ID" >> "$GITHUB_ENV"
           cat "$RUNNER_TEMP/orbit-v02-kernel/kernel-metadata.json"
 
       - name: Submit fine-tuning job to Kaggle
         shell: bash
         run: |
           set -euo pipefail
-          KERNEL_ID="$KAGGLE_USERNAME/orbit-seed-v02-training"
           kaggle kernels push -p "$RUNNER_TEMP/orbit-v02-kernel" --timeout 43200 --accelerator NvidiaTeslaT4
+
+          # Resolve the canonical ref again after push. The API may normalize a
+          # title into a slug different from the one initially supplied.
+          kaggle kernels list --mine --search "ORBIT Seed v0.2" --format json > "$RUNNER_TEMP/orbit-kernels-after.json"
+          KERNEL_ID="$(python - "$RUNNER_TEMP/orbit-kernels-after.json" <<'PY'
+          import json
+          import sys
+          rows = json.load(open(sys.argv[1], encoding="utf-8"))
+          matches = [row for row in rows if row.get("title") == "ORBIT Seed v0.2 Fine-tuning"]
+          if len(matches) != 1:
+              raise SystemExit("Expected exactly one ORBIT notebook after push; found: " + repr([m.get("ref") for m in matches]))
+          print(matches[0]["ref"])
+          PY
+          )"
+          echo "Kaggle confirmed notebook reference: $KERNEL_ID"
           echo "KERNEL_ID=$KERNEL_ID" >> "$GITHUB_ENV"
-          echo "Submitted $KERNEL_ID"
 
       - name: Wait for Kaggle to finish
         shell: bash
@@ -85,7 +125,11 @@ jobs:
           set -euo pipefail
           completed=0
           for attempt in $(seq 1 320); do
-            status="$(kaggle kernels status "$KERNEL_ID" 2>&1 || true)"
+            if ! status="$(kaggle kernels status "$KERNEL_ID" 2>&1)"; then
+              echo "$status"
+              echo "::error::Could not read the Kaggle notebook status using the canonical ref '$KERNEL_ID'."
+              exit 1
+            fi
             echo "$status"
             if echo "$status" | grep -Eiq 'complete|completed|succeeded|finished'; then
               completed=1
@@ -99,8 +143,7 @@ jobs:
             sleep 60
           done
           if (( completed == 0 )); then
-            echo "::error::Timed out waiting for Kaggle. Check the kernel page."
-            kaggle kernels status "$KERNEL_ID" || true
+            echo "::error::Timed out waiting for Kaggle. Check the notebook page: https://www.kaggle.com/code/$KERNEL_ID"
             exit 1
           fi
 
