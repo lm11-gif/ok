@@ -525,6 +525,7 @@ def _load_daily_dialogues(seed: int) -> tuple[list[str], list[str], list[dict[st
                     "prompt": prefix[-1]["text"],
                     "reference": messages[target_index]["text"],
                     "history": prefix[:-1],
+                    "rollout_messages": messages,
                     "formatted_prompt": _format_chat_messages(prefix, include_end=False)
                     + "\n<|assistant|>",
                 })
@@ -853,6 +854,7 @@ def _load_ultrachat_dialogues(
             "prompt": prefix[-1]["text"],
             "reference": messages[target_index]["text"],
             "history": prefix[:-1],
+            "rollout_messages": messages,
             "formatted_prompt": _format_chat_messages(prefix, include_end=False)
             + "\n<|assistant|>",
         })
@@ -1040,6 +1042,51 @@ def _masked_language_loss(
     return per_token[active].mean()
 
 
+
+
+def _generate_conversation_rollouts(
+    model, tokenizer, dialogues: list[dict[str, Any]],
+    max_dialogues: int = 4, max_turns: int = 4,
+) -> list[dict[str, Any]]:
+    """Evaluate multiple turns while feeding generated replies back as history."""
+    samples: list[dict[str, Any]] = []
+    candidates = [item for item in dialogues if item.get("rollout_messages")]
+    random.shuffle(candidates)
+    for dialogue in candidates[:max_dialogues]:
+        history: list[dict[str, str]] = []
+        pending_user: dict[str, str] | None = None
+        turn_number = 0
+        for message in dialogue["rollout_messages"]:
+            if message["role"] == "user":
+                pending_user = message
+                continue
+            if message["role"] != "assistant" or pending_user is None:
+                continue
+            prefix = history + [pending_user]
+            prompt = _format_chat_messages(prefix, include_end=False) + "\n<|assistant|>"
+            answer = model.generate(
+                prompt, tokenizer, max_new_tokens=96,
+                temperature=0.42, top_k=32, top_p=0.90,
+            )
+            turn_number += 1
+            samples.append({
+                "dataset": dialogue["dataset"] + " autoregressive conversation rollout",
+                "evaluation_mode": "generated-history rollout",
+                "turn_number": turn_number,
+                "prompt": pending_user["text"],
+                "history": list(history),
+                "reference": message["text"],
+                "answer": answer,
+            })
+            history.extend([
+                pending_user,
+                {"role": "assistant", "text": answer},
+            ])
+            pending_user = None
+            if turn_number >= max_turns:
+                break
+    return samples
+
 def run_language_generator(data, device, out_dir, args, amp_enabled):
     train_documents, validation_documents, dialogue_eval, dataset_sources = build_language_documents(
         data, args.seed, include_public=not args.smoke,
@@ -1201,7 +1248,16 @@ def run_language_generator(data, device, out_dir, args, amp_enabled):
             "prompt": prompt,
             "answer": answer,
         })
+    rollout_samples = _generate_conversation_rollouts(
+        model, tokenizer, dialogue_eval, max_dialogues=4, max_turns=4
+    )
+    evaluation_samples.extend(rollout_samples)
     generation_evaluation = _build_language_quality_stats(evaluation_samples)
+    generation_evaluation["multi_turn_rollout_samples"] = len(rollout_samples)
+    generation_evaluation["multi_turn_rollout_note"] = (
+        "For each rollout, generated assistant replies are fed into the next turn's history; "
+        "the reference transcript is never substituted for a generated prior reply."
+    )
 
     sync_cuda(device)
     elapsed = time.perf_counter() - started
