@@ -69,6 +69,7 @@ except ImportError:  # Kaggle script mode: modules are side-by-side.
         "# Generated self-contained Kaggle entry point. Do not edit directly.",
         core.rstrip(),
         models.rstrip(),
+        language.rstrip(),
         "import base64, zlib\n" + corpus_assignment + "\n" + runtime_assignment,
         trainer.lstrip(),
         "",
