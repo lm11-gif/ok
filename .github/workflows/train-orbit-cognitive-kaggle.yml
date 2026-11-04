@@ -49,7 +49,7 @@ jobs:
           python -m py_compile "$KERNEL_DIR/train.py"
           cat > "$KERNEL_DIR/kernel-metadata.json" <<EOF
           {
-            "id": "$KAGGLE_USERNAME/orbit-cognitive-v2-2-gpu-training",
+            "id": "$KAGGLE_USERNAME/orbit-cognitive-v2-2-conversational-gpu-training",
             "title": "ORBIT Cognitive v2.2 Conversational GPU Training",
             "code_file": "train.py",
             "language": "python",
@@ -69,7 +69,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          KERNEL_ID="$KAGGLE_USERNAME/orbit-cognitive-v2-2-gpu-training"
+          KERNEL_ID="$KAGGLE_USERNAME/orbit-cognitive-v2-2-conversational-gpu-training"
           kaggle kernels push -p "$KERNEL_DIR" --timeout 43200 --accelerator NvidiaTeslaT4
           echo "KERNEL_ID=$KERNEL_ID" >> "$GITHUB_ENV"
           echo "Submitted Kaggle kernel: $KERNEL_ID"
