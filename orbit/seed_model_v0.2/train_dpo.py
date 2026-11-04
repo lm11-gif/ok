@@ -17,7 +17,7 @@ from pathlib import Path
 subprocess.run(
     [
         sys.executable, "-m", "pip", "install", "--quiet",
-        "transformers==4.48.3",
+        "transformers==4.53.3",
         "datasets==3.3.2",
         "peft==0.14.0",
         "accelerate==1.3.0",
@@ -293,7 +293,7 @@ def generate_answer(model, tokenizer, prompt_text: str, max_new_tokens: int, tem
 
 def teacher_review_prompt(user_request: str, student_draft: str) -> str:
     return (
-        "You are a careful senior AI assistant supervising a smaller assistant called ORBIT. "
+        "/no_think\nYou are a careful senior AI assistant supervising a smaller assistant called ORBIT. "
         "Produce the final answer that ORBIT should have given. The draft may be incomplete, "
         "unclear, or incorrect. Correct mistakes, answer the actual request, explain important "
         "steps, and keep the response proportionate. Do not invent facts; clearly state uncertainty "
@@ -376,7 +376,7 @@ def main():
             teacher_messages = [
                 {
                     "role": "system",
-                    "content": "You are a careful, accurate assistant improving a junior model's draft.",
+                    "content": "/no_think\nYou are a careful, accurate assistant improving a junior model's draft.",
                 },
                 {"role": "user", "content": review_text},
             ]
