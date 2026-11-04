@@ -413,7 +413,7 @@ After that spot-check, chat.py was updated to:
 - use explicit query wording (“made of”, “need”, “where”, “flow”, etc.) as relation-routing hints, retaining PerceptionNet as fallback;
 - compose more natural definitions (e.g. “rain is precipitation”, “computer is an electronic device”, “desk is furniture”).
 
-Regression tests for these helpers were added. The latest relevant CI run is [41764647490](https://github.com/lm11-gif/ok/actions/runs/41764647490); inspect its live conclusion. Documentation changes triggered another check [41764871483](https://github.com/lm11-gif/ok/actions/runs/41764871483), currently pending at the time of this update. Do not claim the newest chat-controller edits passed until the latest CI run is green.
+Regression tests for these helpers were added. The controller regression tests and bundled smoke checks are in CI run [41764871483](https://github.com/lm11-gif/ok/actions/runs/41764871483), which was still running during CPU-only PyTorch installation. A newer documentation-triggered run [41764965347](https://github.com/lm11-gif/ok/actions/runs/41764965347) is queued behind it. Earlier controller-test runs 41764628587 and 41764647490 were cancelled by newer commits, not failures. Do not claim the newest chat-controller edits passed until the latest run concludes green.
 
 These chat.py-only changes do not require retraining; the checkpoint architecture is unchanged. The current release contains the corrected training objectives and latest trained weights. If a future model class or checkpoint tensor shape changes, retrain and publish a matching archive.
 
