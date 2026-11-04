@@ -114,7 +114,7 @@ def load_checkpoint(path: Path, model, device):
 
 class OrbitCognitive:
     def __init__(self, model_dir: Path, device: str = "auto",
-                 max_new_tokens: int = 240, temperature: float = 0.8):
+                 max_new_tokens: int = 160, temperature: float = 0.72):
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = torch.device(device)
@@ -234,7 +234,7 @@ class OrbitCognitive:
             if facts else "No verified memory facts were retrieved."
         )
         history_text = "".join(
-            f"<|user|> {old_question}\n<|assistant|> {old_answer}\n"
+            f"<|user|> {old_question}\n<|context|> No verified memory facts were retrieved.\n<|assistant|> {old_answer}\n"
             for old_question, old_answer in self.history[-4:]
         )
         prompt = (
@@ -260,8 +260,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default="artifacts/orbit-cognitive-v2")
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
-    parser.add_argument("--max-new-tokens", type=int, default=240)
-    parser.add_argument("--temperature", type=float, default=0.8)
+    parser.add_argument("--max-new-tokens", type=int, default=160)
+    parser.add_argument("--temperature", type=float, default=0.72)
     args = parser.parse_args()
     bot = OrbitCognitive(
         Path(args.model), args.device,
